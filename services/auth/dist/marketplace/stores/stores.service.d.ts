@@ -1,0 +1,108 @@
+import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../../common/database/prisma.service';
+import { UzumApiClient } from '../../uzum/client/uzum-api.client';
+import { ConnectStoreDto, UpdateConnectionDto } from './dto/stores.dto';
+export declare class StoresService {
+    private readonly prisma;
+    private readonly uzumClient;
+    private readonly config;
+    private readonly logger;
+    constructor(prisma: PrismaService, uzumClient: UzumApiClient, config: ConfigService);
+    private get encryptionSecret();
+    getStores(userId: string): Promise<({
+        connection: {
+            uzumShopId: string;
+            isConnected: boolean;
+            isAutoSync: boolean;
+            lastSyncAt: Date | null;
+            lastSyncStatus: import(".prisma/client").$Enums.SyncStatus;
+            lastSyncError: string | null;
+            rateLimitRemaining: number | null;
+            rateLimitDayRemaining: number | null;
+        } | null;
+        _count: {
+            products: number;
+            orders: number;
+        };
+    } & {
+        id: string;
+        createdAt: Date;
+        userId: string;
+        name: string;
+        updatedAt: Date;
+        domain: string | null;
+        logo: string | null;
+        status: import(".prisma/client").$Enums.StoreStatus;
+        plan: import(".prisma/client").$Enums.Plan;
+    })[]>;
+    getStore(userId: string, storeId: string): Promise<{
+        connection: {
+            uzumShopId: string;
+            isConnected: boolean;
+            isAutoSync: boolean;
+            lastSyncAt: Date | null;
+            lastSyncStatus: import(".prisma/client").$Enums.SyncStatus;
+            lastSyncError: string | null;
+            rateLimitRemaining: number | null;
+            rateLimitDayRemaining: number | null;
+        } | null;
+    } & {
+        id: string;
+        createdAt: Date;
+        userId: string;
+        name: string;
+        updatedAt: Date;
+        domain: string | null;
+        logo: string | null;
+        status: import(".prisma/client").$Enums.StoreStatus;
+        plan: import(".prisma/client").$Enums.Plan;
+    }>;
+    connectStore(userId: string, storeId: string, dto: ConnectStoreDto): Promise<{
+        connected: boolean;
+        shopName: string;
+        warning: string;
+        message: string;
+    } | {
+        connected: boolean;
+        shopName: string;
+        warning?: undefined;
+        message?: undefined;
+    }>;
+    disconnectStore(userId: string, storeId: string): Promise<{
+        disconnected: boolean;
+    }>;
+    updateConnectionSettings(userId: string, storeId: string, dto: UpdateConnectionDto): Promise<{
+        updated: boolean;
+    }>;
+    testConnection(userId: string, storeId: string): Promise<{
+        healthy: boolean;
+        shopName?: string;
+        latencyMs?: number;
+    }>;
+    getDecryptedApiKey(storeId: string): Promise<string | null>;
+    getConnectionInfo(storeId: string): Promise<{
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        uzumShopId: string;
+        apiKeyEncrypted: string;
+        apiKeyIv: string;
+        apiKeyTag: string;
+        isConnected: boolean;
+        isAutoSync: boolean;
+        lastSyncAt: Date | null;
+        lastSyncStatus: import(".prisma/client").$Enums.SyncStatus;
+        lastSyncError: string | null;
+        rateLimitRemaining: number | null;
+        rateLimitDayRemaining: number | null;
+        rateLimitResetAt: Date | null;
+        storeId: string;
+    } | null>;
+    markSyncStarted(storeId: string): Promise<void>;
+    markSyncCompleted(storeId: string): Promise<void>;
+    markSyncFailed(storeId: string, error: string): Promise<void>;
+    getConnectedStores(): Promise<Array<{
+        storeId: string;
+        uzumShopId: string;
+    }>>;
+}

@@ -1,0 +1,654 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USERS & AUTHENTICATION
+// ============================================
+
+model User {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  email     String?  @unique
+  password  String?
+  name      String?
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stores        Store[]
+  sessions      Session[]
+  otps          Otp[]
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@index([phone])
+  @@index([email])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Session {
+  id        String         @id @default(uuid())
+  userId    String
+  token     String         @unique
+  device    SessionDevice?
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("sessions")
+}
+
+model SessionDevice {
+  id        String  @id @default(uuid())
+  sessionId String  @unique
+  type      String?
+  os        String?
+  browser   String?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("session_devices")
+}
+
+model Otp {
+  id          String   @id @default(uuid())
+  userId      String?
+  phone       String
+  code        String
+  type        OtpType
+  expiresAt   DateTime
+  verified    Boolean  @default(false)
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(5)
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([phone])
+  @@index([userId])
+  @@map("otps")
+}
+
+enum OtpType {
+  PHONE_VERIFICATION
+  LOGIN
+  PASSWORD_RESET
+  TWO_FACTOR
+}
+
+// ============================================
+// STORES (MULTI-TENANCY)
+// ============================================
+
+model Store {
+  id        String      @id @default(uuid())
+  userId    String
+  name      String
+  domain    String?
+  logo      String?
+  status    StoreStatus @default(ACTIVE)
+  plan      Plan        @default(FREE)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connection StoreConnection?
+  products   Product[]
+  orders     Order[]
+  syncLogs   SyncLog[]
+  snapshots  AnalyticsSnapshot[]
+  expenses   Expense[]
+  reports    Report[]
+  insights   AiInsight[]
+  notifications Notification[]
+
+  @@index([userId])
+  @@map("stores")
+}
+
+model StoreConnection {
+  id                String     @id @default(uuid())
+  storeId           String     @unique
+  uzumShopId        String
+  apiKeyEncrypted   String
+  apiKeyIv          String
+  apiKeyTag         String
+  isConnected       Boolean    @default(false)
+  isAutoSync        Boolean    @default(true)
+  lastSyncAt        DateTime?
+  lastSyncStatus    SyncStatus @default(PENDING)
+  lastSyncError     String?
+  rateLimitRemaining      Int?
+  rateLimitDayRemaining   Int?
+  rateLimitResetAt  DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([uzumShopId])
+  @@map("store_connections")
+}
+
+enum StoreStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+// ============================================
+// PRODUCTS
+// ============================================
+
+model Product {
+  id            String        @id @default(uuid())
+  storeId       String
+  uzumSkuId     String
+  uzumProductId String?
+  name          String
+  category      String?
+  price         Decimal       @db.Decimal(14, 2)
+  purchasePrice Decimal?      @db.Decimal(14, 2)
+  stock         Int           @default(0)
+  soldCount     Int           @default(0)
+  revenue       Decimal       @default(0) @db.Decimal(14, 2)
+  profit        Decimal       @default(0) @db.Decimal(14, 2)
+  margin        Decimal       @default(0) @db.Decimal(5, 2)
+  rating        Decimal?      @db.Decimal(3, 2)
+  reviewCount   Int           @default(0)
+  viewCount     Int           @default(0)
+  status        ProductStatus @default(ACTIVE)
+  rank          String?
+  imageUrl      String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+
+  store      Store           @relation(fields: [storeId], references: [id])
+  orderItems OrderItem[]
+  inventory  Inventory?
+  metrics    ProductMetric[]
+
+  @@unique([storeId, uzumSkuId])
+  @@index([storeId])
+  @@index([uzumSkuId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("products")
+}
+
+model ProductMetric {
+  id        String   @id @default(uuid())
+  productId String
+  date      DateTime @db.Date
+  revenue   Decimal  @default(0) @db.Decimal(14, 2)
+  orders    Int      @default(0)
+  views     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, date])
+  @@index([productId])
+  @@index([date])
+  @@map("product_metrics")
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  WARNING
+  ARCHIVE
+  DEFECTED
+}
+
+// ============================================
+// ORDERS
+// ============================================
+
+model Order {
+  id              String      @id @default(uuid())
+  storeId         String
+  uzumOrderId     String      @unique
+  orderNumber     String?
+  customerName    String?
+  customerPhone   String?
+  deliveryAddress String?
+  deliveryCity    String?
+  scheme          OrderScheme @default(FBS)
+  status          OrderStatus
+  paymentMethod   String?
+  subtotal        Decimal     @db.Decimal(14, 2)
+  commission      Decimal     @default(0) @db.Decimal(14, 2)
+  deliveryFee     Decimal     @default(0) @db.Decimal(14, 2)
+  discount        Decimal     @default(0) @db.Decimal(14, 2)
+  total           Decimal     @db.Decimal(14, 2)
+  profit          Decimal     @default(0) @db.Decimal(14, 2)
+  trackingNumber  String?
+  notes           String?
+  orderedAt       DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  store Store       @relation(fields: [storeId], references: [id])
+  items OrderItem[]
+
+  @@index([storeId])
+  @@index([uzumOrderId])
+  @@index([status])
+  @@index([orderedAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  productId String?
+  uzumSkuId String
+  name      String
+  quantity  Int
+  price     Decimal @db.Decimal(14, 2)
+  total     Decimal @db.Decimal(14, 2)
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+enum OrderScheme {
+  FBS
+  DBS
+}
+
+enum OrderStatus {
+  CREATED
+  PACKING
+  PENDING_DELIVERY
+  DELIVERING
+  DELIVERED
+  ACCEPTED_AT_DP
+  DELIVERED_TO_CUSTOMER_DELIVERY_POINT
+  COMPLETED
+  CANCELED
+  PENDING_CANCELLATION
+  RETURNED
+}
+
+// ============================================
+// INVENTORY
+// ============================================
+
+model Inventory {
+  id              String          @id @default(uuid())
+  productId       String          @unique
+  storeId         String
+  currentStock    Int             @default(0)
+  reservedStock   Int             @default(0)
+  minStock        Int             @default(5)
+  reorderPoint    Int             @default(10)
+  soldLast30Days  Int             @default(0)
+  daysUntilStockout Int?
+  status          InventoryStatus @default(IN_STOCK)
+  lastRestockedAt DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([status])
+  @@map("inventory")
+}
+
+enum InventoryStatus {
+  IN_STOCK
+  LOW_STOCK
+  OUT_OF_STOCK
+  OVERSTOCK
+}
+
+// ============================================
+// FINANCE & ANALYTICS
+// ============================================
+
+model AnalyticsSnapshot {
+  id          String   @id @default(uuid())
+  storeId     String
+  date        DateTime @db.Date
+  revenue     Decimal  @default(0) @db.Decimal(14, 2)
+  netRevenue  Decimal  @default(0) @db.Decimal(14, 2)
+  orders      Int      @default(0)
+  products    Int      @default(0)
+  commission  Decimal  @default(0) @db.Decimal(14, 2)
+  profit      Decimal  @default(0) @db.Decimal(14, 2)
+  margin      Decimal  @default(0) @db.Decimal(5, 2)
+  returns     Int      @default(0)
+  returnValue Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, date])
+  @@index([storeId])
+  @@index([date])
+  @@map("analytics_snapshots")
+}
+
+model Expense {
+  id          String          @id @default(uuid())
+  storeId     String
+  category    ExpenseCategory
+  description String
+  amount      Decimal         @db.Decimal(14, 2)
+  source      String?
+  uzumRef     String?
+  date        DateTime        @db.Date
+  recurring   Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  deletedAt   DateTime?
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@index([storeId])
+  @@index([date])
+  @@index([category])
+  @@index([deletedAt])
+  @@map("expenses")
+}
+
+enum ExpenseCategory {
+  COMMISSION
+  SHIPPING
+  PACKAGING
+  ADVERTISING
+  TAX
+  SALARY
+  RENT
+  OTHER
+}
+
+// ============================================
+// SYNC & LOGS
+// ============================================
+
+model SyncLog {
+  id          String     @id @default(uuid())
+  storeId     String
+  syncType    SyncType
+  status      SyncStatus
+  startedAt   DateTime   @default(now())
+  completedAt DateTime?
+  error       String?
+  itemsSynced Int        @default(0)
+  metadata    Json?
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@index([storeId])
+  @@index([syncType])
+  @@index([status])
+  @@index([startedAt])
+  @@map("sync_logs")
+}
+
+model ApiLog {
+  id                    String   @id @default(uuid())
+  storeId               String?
+  endpoint              String
+  method                String
+  statusCode            Int
+  responseTimeMs        Int
+  rateLimitRemaining    Int?
+  rateLimitDayRemaining Int?
+  error                 String?
+  createdAt             DateTime @default(now())
+
+  @@index([storeId])
+  @@index([endpoint])
+  @@index([createdAt])
+  @@map("api_logs")
+}
+
+enum SyncType {
+  FULL
+  ORDERS
+  PRODUCTS
+  ANALYTICS
+  INVENTORY
+  EXPENSES
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id          String               @id @default(uuid())
+  userId      String
+  storeId     String?
+  type        NotificationType
+  category    NotificationCategory
+  title       String
+  message     String
+  isRead      Boolean              @default(false)
+  metadata    Json?
+  actionLabel String?
+  actionHref  String?
+  createdAt   DateTime             @default(now())
+  readAt      DateTime?
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([storeId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  SUCCESS
+  WARNING
+  ERROR
+  INFO
+  AI
+}
+
+enum NotificationCategory {
+  ORDER
+  PRODUCT
+  FINANCE
+  INVENTORY
+  AI
+  SYSTEM
+  TEAM
+}
+
+// ============================================
+// REPORTS
+// ============================================
+
+model Report {
+  id        String       @id @default(uuid())
+  storeId   String
+  name      String
+  type      ReportType
+  format    ReportFormat
+  dateFrom  DateTime     @db.Date
+  dateTo    DateTime     @db.Date
+  status    ReportStatus @default(GENERATING)
+  filePath  String?
+  fileSize  String?
+  metadata  Json?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@index([storeId])
+  @@index([status])
+  @@map("reports")
+}
+
+enum ReportType {
+  SALES
+  PRODUCTS
+  FINANCE
+  INVENTORY
+  ORDERS
+  CUSTOM
+}
+
+enum ReportFormat {
+  PDF
+  EXCEL
+  CSV
+}
+
+enum ReportStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
+// ============================================
+// AI INSIGHTS
+// ============================================
+
+model AiInsight {
+  id              String          @id @default(uuid())
+  storeId         String
+  type            InsightType
+  severity        InsightSeverity
+  title           String
+  description     String
+  impact          String
+  recommendation  String
+  potentialGain   Decimal?        @db.Decimal(14, 2)
+  affectedProduct String?
+  confidence      Int
+  isDismissed     Boolean         @default(false)
+  expiresAt       DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@index([storeId])
+  @@index([severity])
+  @@index([isDismissed])
+  @@map("ai_insights")
+}
+
+enum InsightType {
+  DEAD_PRODUCT
+  PRICE_OPTIMIZATION
+  STOCK_ALERT
+  TREND
+  COMPETITOR
+  OPPORTUNITY
+}
+
+enum InsightSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// ============================================
+// AUDIT LOGS
+// ============================================
+
+model AuditLog {
+  id        String      @id @default(uuid())
+  userId    String?
+  action    AuditAction
+  entity    String?
+  entityId  String?
+  ipAddress String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime    @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  USER_REGISTERED
+  USER_LOGGED_IN
+  USER_LOGGED_OUT
+  PASSWORD_CHANGED
+  STORE_CREATED
+  STORE_UPDATED
+  STORE_DELETED
+  STORE_SWITCHED
+  STORE_CONNECTED
+  STORE_DISCONNECTED
+  TOKEN_REFRESHED
+  TOKEN_REVOKED
+  OTP_SENT
+  OTP_VERIFIED
+  OTP_FAILED
+  SYNC_STARTED
+  SYNC_COMPLETED
+  SYNC_FAILED
+}
