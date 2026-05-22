@@ -166,6 +166,11 @@ export declare class UzumApiClient {
     }>;
     getAllFbsOrders(storeId: string, apiKey: string, shopId: string | number, statuses?: string[]): Promise<any[]>;
     getFbsOrderCount(storeId: string, apiKey: string, shopId: string | number, status: string, dateFrom?: number, dateTo?: number): Promise<number>;
+    getFbsInvoices(storeId: string, apiKey: string, statuses?: string[], page?: number, size?: number): Promise<{
+        invoices: any[];
+    }>;
+    getFbsInvoiceById(storeId: string, apiKey: string, invoiceId: number | string): Promise<any | null>;
+    getFbsInvoiceOrders(storeId: string, apiKey: string, invoiceId: number | string): Promise<any[]>;
     getFbsLabelPdf(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
     validateConnection(storeId: string, apiKey: string): Promise<{
         valid: boolean;

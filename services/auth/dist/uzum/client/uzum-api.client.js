@@ -322,26 +322,64 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
     }
     async getFbsOrderCount(storeId, apiKey, shopId, status, dateFrom, dateTo) {
         const client = this.buildClient(apiKey);
-        try {
-            const start = Date.now();
-            const response = await client.get('/v2/fbs/orders/count', {
-                params: {
-                    shopIds: shopId,
-                    status,
-                    ...(dateFrom ? { dateFrom } : {}),
-                    ...(dateTo ? { dateTo } : {}),
-                },
-                timeout: 8_000,
-            });
-            const rateInfo = this.extractRateLimitInfo(response.headers);
-            await this.persistRateLimitInfo(storeId, rateInfo).catch(() => { });
-            await this.logApiCall(storeId, '/v2/fbs/orders/count', 'GET', response.status, Date.now() - start, rateInfo).catch(() => { });
-            return response.data?.payload ?? 0;
+        const params = {
+            shopIds: shopId,
+            status,
+            ...(dateFrom ? { dateFrom } : {}),
+            ...(dateTo ? { dateTo } : {}),
+        };
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                const response = await client.get('/v2/fbs/orders/count', { params, timeout: 8_000 });
+                return response.data?.payload ?? 0;
+            }
+            catch (err) {
+                const status429 = err?.response?.status === 429;
+                if (status429 && attempt === 1) {
+                    await this.sleep(2000);
+                    continue;
+                }
+                this.logger.warn(`count failed for status=${status}: ${err?.message}`);
+                return 0;
+            }
         }
-        catch (err) {
-            this.logger.warn(`count failed for status=${status}: ${err.message}`);
-            return 0;
+        return 0;
+    }
+    async getFbsInvoices(storeId, apiKey, statuses = ['CREATED', 'ACCEPTANCE_IN_PROGRESS', 'ACCEPTED', 'CANCELLED'], page = 0, size = 20) {
+        const client = this.buildClient(apiKey);
+        const safeSize = Math.min(Math.max(size, 1), 20);
+        const qs = [];
+        statuses.forEach((s) => qs.push(`statuses=${encodeURIComponent(s)}`));
+        qs.push(`page=${page}`);
+        qs.push(`size=${safeSize}`);
+        const url = `/v1/fbs/invoice?${qs.join('&')}`;
+        for (let attempt = 1; attempt <= 4; attempt++) {
+            try {
+                const response = await client.get(url, { timeout: 12_000 });
+                return { invoices: response.data?.payload || [] };
+            }
+            catch (err) {
+                const code = err?.response?.status;
+                const body = err?.response?.data;
+                const retryable = code === 429 || code === 503 || code === 400 || code === 502 || code === 504;
+                if (retryable && attempt < 4) {
+                    this.logger.warn(`getFbsInvoices ${code} — retry ${attempt}/3 in ${attempt * 1000}ms`);
+                    await this.sleep(attempt * 1000);
+                    continue;
+                }
+                this.logger.warn(`getFbsInvoices final fail (code=${code}): ${JSON.stringify(body)?.slice(0, 200)}`);
+                return { invoices: [] };
+            }
         }
+        return { invoices: [] };
+    }
+    async getFbsInvoiceById(storeId, apiKey, invoiceId) {
+        const data = await this.executeWithRetry(storeId, apiKey, `/v1/fbs/invoice/${invoiceId}`, 'GET', (client) => client.get(`/v1/fbs/invoice/${invoiceId}`));
+        return data?.payload || null;
+    }
+    async getFbsInvoiceOrders(storeId, apiKey, invoiceId) {
+        const data = await this.executeWithRetry(storeId, apiKey, `/v1/fbs/invoice/${invoiceId}/orders`, 'GET', (client) => client.get(`/v1/fbs/invoice/${invoiceId}/orders`));
+        return data?.payload || [];
     }
     async getFbsLabelPdf(storeId, apiKey, orderId, size = 'LARGE') {
         const data = await this.executeWithRetry(storeId, apiKey, `/v1/fbs/order/${orderId}/labels/print`, 'GET', (client) => client.get(`/v1/fbs/order/${orderId}/labels/print`, {

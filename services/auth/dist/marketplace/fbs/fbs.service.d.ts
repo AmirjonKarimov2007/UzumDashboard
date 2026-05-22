@@ -43,6 +43,13 @@ export declare class FbsService {
         size: number;
         status: string;
     }>;
+    getInvoices(userId: string, storeId: string, statuses?: string[], page?: number, size?: number): Promise<{
+        invoices: any[];
+    }>;
+    getInvoice(userId: string, storeId: string, invoiceId: number | string): Promise<any>;
+    getInvoiceOrders(userId: string, storeId: string, invoiceId: number | string): Promise<{
+        orders: any[];
+    }>;
     getLiveStocks(userId: string, storeId: string): Promise<{
         stocks: any[];
         total: number;

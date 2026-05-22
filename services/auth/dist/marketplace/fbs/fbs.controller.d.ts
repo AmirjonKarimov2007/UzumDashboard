@@ -16,6 +16,13 @@ export declare class FbsController {
         count: number;
         orders: any[];
     }>;
+    getInvoices(userId: string, storeId: string, statusesParam?: string, page?: number, size?: number): Promise<{
+        invoices: any[];
+    }>;
+    getInvoice(userId: string, storeId: string, invoiceId: string): Promise<any>;
+    getInvoiceOrders(userId: string, storeId: string, invoiceId: string): Promise<{
+        orders: any[];
+    }>;
     getLiveProducts(userId: string, storeId: string, page: number, size: number, filter?: string, searchQuery?: string, sortBy?: string, order?: 'asc' | 'desc'): Promise<{
         products: any[];
         total: number;

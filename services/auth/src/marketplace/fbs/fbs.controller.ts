@@ -76,6 +76,38 @@ export class FbsController {
     return this.fbsService.getAllOrders(userId, storeId, statuses);
   }
 
+  // ─── Invoices (Ta'minlashlar) ────────────────────────────────────────
+
+  @Get('invoices')
+  getInvoices(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('statuses') statusesParam?: string,
+    @Query('page', new DefaultValuePipe(0), ParseIntPipe) page?: number,
+    @Query('size', new DefaultValuePipe(20), ParseIntPipe) size?: number,
+  ) {
+    const statuses = statusesParam ? statusesParam.split(',') : undefined;
+    return this.fbsService.getInvoices(userId, storeId, statuses, page, size);
+  }
+
+  @Get('invoices/:invoiceId')
+  getInvoice(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.getInvoice(userId, storeId, invoiceId);
+  }
+
+  @Get('invoices/:invoiceId/orders')
+  getInvoiceOrders(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
+  }
+
   /** Live products from Uzum — bypasses sync, fetches directly */
   @Get('products')
   getLiveProducts(

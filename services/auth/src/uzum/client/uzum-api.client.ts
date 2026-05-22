@@ -646,28 +646,87 @@ export class UzumApiClient {
     dateFrom?: number,
     dateTo?: number,
   ): Promise<number> {
-    // Single-shot (no retry/wait) — counts are tolerant of failure, and we
-    // need to fan out 11 of these without blocking 60s on rate-limit retry
     const client = this.buildClient(apiKey);
-    try {
-      const start = Date.now();
-      const response = await client.get('/v2/fbs/orders/count', {
-        params: {
-          shopIds: shopId,
-          status,
-          ...(dateFrom ? { dateFrom } : {}),
-          ...(dateTo ? { dateTo } : {}),
-        },
-        timeout: 8_000,
-      });
-      const rateInfo = this.extractRateLimitInfo(response.headers as Record<string, string>);
-      await this.persistRateLimitInfo(storeId, rateInfo).catch(() => {});
-      await this.logApiCall(storeId, '/v2/fbs/orders/count', 'GET', response.status, Date.now() - start, rateInfo).catch(() => {});
-      return response.data?.payload ?? 0;
-    } catch (err) {
-      this.logger.warn(`count failed for status=${status}: ${(err as Error).message}`);
-      return 0;
+    const params = {
+      shopIds: shopId,
+      status,
+      ...(dateFrom ? { dateFrom } : {}),
+      ...(dateTo ? { dateTo } : {}),
+    };
+
+    // Try once; on 429 wait 2s and retry once (not the full retry-after)
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await client.get('/v2/fbs/orders/count', { params, timeout: 8_000 });
+        return response.data?.payload ?? 0;
+      } catch (err: any) {
+        const status429 = err?.response?.status === 429;
+        if (status429 && attempt === 1) {
+          await this.sleep(2000);
+          continue;
+        }
+        this.logger.warn(`count failed for status=${status}: ${err?.message}`);
+        return 0;
+      }
     }
+    return 0;
+  }
+
+  // ─── FBS Invoices (Ta'minlashlar) ──────────────────────────────────────
+
+  async getFbsInvoices(
+    storeId: string,
+    apiKey: string,
+    statuses: string[] = ['CREATED', 'ACCEPTANCE_IN_PROGRESS', 'ACCEPTED', 'CANCELLED'],
+    page: number = 0,
+    size: number = 20,
+  ): Promise<{ invoices: any[] }> {
+    const client = this.buildClient(apiKey);
+
+    // Build URL manually to control exact query string format
+    // Uzum's /v1/fbs/invoice enforces max size=20 — clamp on our side
+    const safeSize = Math.min(Math.max(size, 1), 20);
+    const qs: string[] = [];
+    statuses.forEach((s) => qs.push(`statuses=${encodeURIComponent(s)}`));
+    qs.push(`page=${page}`);
+    qs.push(`size=${safeSize}`);
+    const url = `/v1/fbs/invoice?${qs.join('&')}`;
+
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      try {
+        const response = await client.get(url, { timeout: 12_000 });
+        return { invoices: response.data?.payload || [] };
+      } catch (err: any) {
+        const code = err?.response?.status;
+        const body = err?.response?.data;
+        // Uzum sporadically returns 400 "Bad request" for valid requests when load is high
+        const retryable = code === 429 || code === 503 || code === 400 || code === 502 || code === 504;
+        if (retryable && attempt < 4) {
+          this.logger.warn(`getFbsInvoices ${code} — retry ${attempt}/3 in ${attempt * 1000}ms`);
+          await this.sleep(attempt * 1000);
+          continue;
+        }
+        this.logger.warn(`getFbsInvoices final fail (code=${code}): ${JSON.stringify(body)?.slice(0, 200)}`);
+        return { invoices: [] };
+      }
+    }
+    return { invoices: [] };
+  }
+
+  async getFbsInvoiceById(storeId: string, apiKey: string, invoiceId: number | string): Promise<any | null> {
+    const data = await this.executeWithRetry<{ payload: any }>(
+      storeId, apiKey, `/v1/fbs/invoice/${invoiceId}`, 'GET',
+      (client) => client.get(`/v1/fbs/invoice/${invoiceId}`),
+    );
+    return data?.payload || null;
+  }
+
+  async getFbsInvoiceOrders(storeId: string, apiKey: string, invoiceId: number | string): Promise<any[]> {
+    const data = await this.executeWithRetry<{ payload: any[] }>(
+      storeId, apiKey, `/v1/fbs/invoice/${invoiceId}/orders`, 'GET',
+      (client) => client.get(`/v1/fbs/invoice/${invoiceId}/orders`),
+    );
+    return data?.payload || [];
   }
 
   async getFbsLabelPdf(

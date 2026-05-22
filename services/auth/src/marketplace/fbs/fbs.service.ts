@@ -133,6 +133,30 @@ export class FbsService {
     return { orders: data.orders, page, size, status };
   }
 
+  // ─── FBS Invoices (Ta'minlashlar) ────────────────────────────────────
+
+  async getInvoices(
+    userId: string,
+    storeId: string,
+    statuses?: string[],
+    page: number = 0,
+    size: number = 20,
+  ) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    return this.uzumClient.getFbsInvoices(storeId, apiKey, statuses, page, size);
+  }
+
+  async getInvoice(userId: string, storeId: string, invoiceId: number | string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    return this.uzumClient.getFbsInvoiceById(storeId, apiKey, invoiceId);
+  }
+
+  async getInvoiceOrders(userId: string, storeId: string, invoiceId: number | string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const orders = await this.uzumClient.getFbsInvoiceOrders(storeId, apiKey, invoiceId);
+    return { orders };
+  }
+
   async getLiveStocks(userId: string, storeId: string) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
     const { skuAmountList } = await this.uzumClient.getStocks(storeId, apiKey);

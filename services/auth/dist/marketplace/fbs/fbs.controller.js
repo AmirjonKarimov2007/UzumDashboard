@@ -47,6 +47,16 @@ let FbsController = class FbsController {
         const statuses = statusesParam ? statusesParam.split(',') : undefined;
         return this.fbsService.getAllOrders(userId, storeId, statuses);
     }
+    getInvoices(userId, storeId, statusesParam, page, size) {
+        const statuses = statusesParam ? statusesParam.split(',') : undefined;
+        return this.fbsService.getInvoices(userId, storeId, statuses, page, size);
+    }
+    getInvoice(userId, storeId, invoiceId) {
+        return this.fbsService.getInvoice(userId, storeId, invoiceId);
+    }
+    getInvoiceOrders(userId, storeId, invoiceId) {
+        return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
+    }
     getLiveProducts(userId, storeId, page, size, filter, searchQuery, sortBy, order) {
         return this.fbsService.getLiveProducts(userId, storeId, page, size, filter, searchQuery, sortBy, order);
     }
@@ -103,6 +113,35 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getAllOrders", null);
+__decorate([
+    (0, common_1.Get)('invoices'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('statuses')),
+    __param(3, (0, common_1.Query)('page', new common_1.DefaultValuePipe(0), common_1.ParseIntPipe)),
+    __param(4, (0, common_1.Query)('size', new common_1.DefaultValuePipe(20), common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, Number, Number]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getInvoices", null);
+__decorate([
+    (0, common_1.Get)('invoices/:invoiceId'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('invoiceId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getInvoice", null);
+__decorate([
+    (0, common_1.Get)('invoices/:invoiceId/orders'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('invoiceId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getInvoiceOrders", null);
 __decorate([
     (0, common_1.Get)('products'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),

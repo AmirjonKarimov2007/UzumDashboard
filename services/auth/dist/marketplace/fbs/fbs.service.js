@@ -81,6 +81,19 @@ let FbsService = FbsService_1 = class FbsService {
         const data = await this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size);
         return { orders: data.orders, page, size, status };
     }
+    async getInvoices(userId, storeId, statuses, page = 0, size = 20) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        return this.uzumClient.getFbsInvoices(storeId, apiKey, statuses, page, size);
+    }
+    async getInvoice(userId, storeId, invoiceId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        return this.uzumClient.getFbsInvoiceById(storeId, apiKey, invoiceId);
+    }
+    async getInvoiceOrders(userId, storeId, invoiceId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const orders = await this.uzumClient.getFbsInvoiceOrders(storeId, apiKey, invoiceId);
+        return { orders };
+    }
     async getLiveStocks(userId, storeId) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         const { skuAmountList } = await this.uzumClient.getStocks(storeId, apiKey);
