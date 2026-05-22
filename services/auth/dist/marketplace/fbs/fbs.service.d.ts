@@ -4,9 +4,15 @@ export declare class FbsService {
     private readonly uzumClient;
     private readonly storesService;
     private readonly logger;
+    private countsCache;
     constructor(uzumClient: UzumApiClient, storesService: StoresService);
-    getOrders(userId: string, storeId: string, status?: string, page?: number, size?: number): Promise<{
+    getOrders(userId: string, storeId: string, status?: string, page?: number, size?: number, extra?: {
+        scheme?: 'FBS' | 'DBS';
+        dateFrom?: number;
+        dateTo?: number;
+    }): Promise<{
         orders: any[];
+        totalAmount?: number;
     }>;
     getAllOrders(userId: string, storeId: string, statuses?: string[]): Promise<{
         count: number;
@@ -22,6 +28,20 @@ export declare class FbsService {
         total: number;
         page: number;
         size: number;
+    }>;
+    getOrderCounts(userId: string, storeId: string, dateFrom?: number, dateTo?: number): Promise<Record<string, number>>;
+    getOrdersAdvanced(userId: string, storeId: string, params: {
+        status?: string;
+        page?: number;
+        size?: number;
+        dateFrom?: number;
+        dateTo?: number;
+        scheme?: 'FBS' | 'DBS';
+    }): Promise<{
+        orders: any[];
+        page: number;
+        size: number;
+        status: string;
     }>;
     getLiveStocks(userId: string, storeId: string): Promise<{
         stocks: any[];

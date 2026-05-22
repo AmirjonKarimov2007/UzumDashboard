@@ -5,6 +5,8 @@ import { StoresService } from '../stores/stores.service';
 @Injectable()
 export class FbsService {
   private readonly logger = new Logger(FbsService.name);
+  // Per-store in-memory cache for counts (60s TTL)
+  private countsCache = new Map<string, { data: Record<string, number>; expiresAt: number }>();
 
   constructor(
     private readonly uzumClient: UzumApiClient,
@@ -17,9 +19,10 @@ export class FbsService {
     status: string = 'PACKING',
     page: number = 0,
     size: number = 50,
+    extra: { scheme?: 'FBS' | 'DBS'; dateFrom?: number; dateTo?: number } = {},
   ) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    return this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size);
+    return this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size, extra);
   }
 
   async getAllOrders(
@@ -73,6 +76,61 @@ export class FbsService {
       storeId, apiKey, [uzumShopId], { page, size, dateFrom, dateTo },
     );
     return { orderItems, total, page, size };
+  }
+
+  /** Sequential counts across all FBS statuses (rate-limit safe) with 60s cache */
+  async getOrderCounts(
+    userId: string,
+    storeId: string,
+    dateFrom?: number,
+    dateTo?: number,
+  ) {
+    const cacheKey = `${storeId}:${dateFrom ?? ''}:${dateTo ?? ''}`;
+    const cached = this.countsCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const statuses = [
+      'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
+      'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
+      'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
+    ];
+    // Sequential with small gaps to respect per-second token bucket
+    // ~250ms gap keeps us under the burst window and minimizes 429 retries
+    const result: Record<string, number> = {};
+    for (const status of statuses) {
+      result[status] = await this.uzumClient.getFbsOrderCount(
+        storeId, apiKey, uzumShopId, status, dateFrom, dateTo,
+      );
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    this.countsCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
+    return result;
+  }
+
+  async getOrdersAdvanced(
+    userId: string,
+    storeId: string,
+    params: {
+      status?: string;
+      page?: number;
+      size?: number;
+      dateFrom?: number;
+      dateTo?: number;
+      scheme?: 'FBS' | 'DBS';
+    },
+  ) {
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const { status = 'CREATED', page = 0, size = 20, dateFrom, dateTo, scheme } = params;
+    const queryParams: Record<string, unknown> = { shopIds: uzumShopId, status, page, size };
+    if (dateFrom) queryParams.dateFrom = dateFrom;
+    if (dateTo) queryParams.dateTo = dateTo;
+    if (scheme) queryParams.scheme = scheme;
+
+    const data = await this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size);
+    return { orders: data.orders, page, size, status };
   }
 
   async getLiveStocks(userId: string, storeId: string) {

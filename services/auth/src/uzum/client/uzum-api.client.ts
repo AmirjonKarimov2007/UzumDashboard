@@ -188,7 +188,7 @@ export class UzumApiClient {
     fn: (client: AxiosInstance) => Promise<AxiosResponse<T>>,
   ): Promise<T> {
     const client = this.buildClient(apiKey);
-    let lastError: Error;
+    let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       const start = Date.now();
@@ -270,7 +270,8 @@ export class UzumApiClient {
       }
     }
 
-    throw new ServiceUnavailableException(`Uzum API unavailable after ${this.maxRetries} attempts: ${lastError!.message}`);
+    const errMsg = lastError?.message || `rate-limited or unreachable for ${endpoint}`;
+    throw new ServiceUnavailableException(`Uzum API unavailable after ${this.maxRetries} attempts: ${errMsg}`);
   }
 
   // ─── Shops ────────────────────────────────────────────────────────────────
@@ -583,18 +584,24 @@ export class UzumApiClient {
     status: string = 'PACKING',
     page: number = 0,
     size: number = 50,
-  ): Promise<{ orders: any[] }> {
-    const data = await this.executeWithRetry<{ payload: { orders: any[] } }>(
+    extra: { scheme?: 'FBS' | 'DBS'; dateFrom?: number; dateTo?: number } = {},
+  ): Promise<{ orders: any[]; totalAmount?: number }> {
+    const params: Record<string, unknown> = { shopIds: shopId, status, page, size };
+    if (extra.scheme) params.scheme = extra.scheme;
+    if (extra.dateFrom) params.dateFrom = extra.dateFrom;
+    if (extra.dateTo) params.dateTo = extra.dateTo;
+
+    const data = await this.executeWithRetry<{ payload: { orders: any[]; totalAmount?: number } }>(
       storeId,
       apiKey,
       '/v2/fbs/orders',
       'GET',
-      (client) =>
-        client.get('/v2/fbs/orders', {
-          params: { shopIds: shopId, status, page, size },
-        }),
+      (client) => client.get('/v2/fbs/orders', { params }),
     );
-    return { orders: data?.payload?.orders || [] };
+    return {
+      orders: data?.payload?.orders || [],
+      totalAmount: data?.payload?.totalAmount,
+    };
   }
 
   async getAllFbsOrders(
@@ -629,6 +636,38 @@ export class UzumApiClient {
       }
     }
     return all;
+  }
+
+  async getFbsOrderCount(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    status: string,
+    dateFrom?: number,
+    dateTo?: number,
+  ): Promise<number> {
+    // Single-shot (no retry/wait) — counts are tolerant of failure, and we
+    // need to fan out 11 of these without blocking 60s on rate-limit retry
+    const client = this.buildClient(apiKey);
+    try {
+      const start = Date.now();
+      const response = await client.get('/v2/fbs/orders/count', {
+        params: {
+          shopIds: shopId,
+          status,
+          ...(dateFrom ? { dateFrom } : {}),
+          ...(dateTo ? { dateTo } : {}),
+        },
+        timeout: 8_000,
+      });
+      const rateInfo = this.extractRateLimitInfo(response.headers as Record<string, string>);
+      await this.persistRateLimitInfo(storeId, rateInfo).catch(() => {});
+      await this.logApiCall(storeId, '/v2/fbs/orders/count', 'GET', response.status, Date.now() - start, rateInfo).catch(() => {});
+      return response.data?.payload ?? 0;
+    } catch (err) {
+      this.logger.warn(`count failed for status=${status}: ${(err as Error).message}`);
+      return 0;
+    }
   }
 
   async getFbsLabelPdf(

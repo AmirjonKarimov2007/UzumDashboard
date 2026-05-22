@@ -33,8 +33,15 @@ let FbsController = class FbsController {
     constructor(fbsService) {
         this.fbsService = fbsService;
     }
-    getOrders(userId, storeId, status, page, size) {
-        return this.fbsService.getOrders(userId, storeId, status, page, size);
+    getOrders(userId, storeId, status, page, size, scheme, dateFrom, dateTo) {
+        return this.fbsService.getOrders(userId, storeId, status, page, size, {
+            scheme,
+            dateFrom: dateFrom ? parseInt(dateFrom, 10) : undefined,
+            dateTo: dateTo ? parseInt(dateTo, 10) : undefined,
+        });
+    }
+    getOrderCounts(userId, storeId, dateFrom, dateTo) {
+        return this.fbsService.getOrderCounts(userId, storeId, dateFrom ? parseInt(dateFrom, 10) : undefined, dateTo ? parseInt(dateTo, 10) : undefined);
     }
     getAllOrders(userId, storeId, statusesParam) {
         const statuses = statusesParam ? statusesParam.split(',') : undefined;
@@ -70,10 +77,23 @@ __decorate([
     __param(2, (0, common_1.Query)('status', new common_1.DefaultValuePipe('PACKING'))),
     __param(3, (0, common_1.Query)('page', new common_1.DefaultValuePipe(0), common_1.ParseIntPipe)),
     __param(4, (0, common_1.Query)('size', new common_1.DefaultValuePipe(50), common_1.ParseIntPipe)),
+    __param(5, (0, common_1.Query)('scheme')),
+    __param(6, (0, common_1.Query)('dateFrom')),
+    __param(7, (0, common_1.Query)('dateTo')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, String, Number, Number]),
+    __metadata("design:paramtypes", [String, String, String, Number, Number, String, String, String]),
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getOrders", null);
+__decorate([
+    (0, common_1.Get)('orders/counts'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('dateFrom')),
+    __param(3, (0, common_1.Query)('dateTo')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getOrderCounts", null);
 __decorate([
     (0, common_1.Get)('orders/all'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),

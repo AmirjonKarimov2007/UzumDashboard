@@ -39,8 +39,30 @@ export class FbsController {
     @Query('status', new DefaultValuePipe('PACKING')) status: string,
     @Query('page', new DefaultValuePipe(0), ParseIntPipe) page: number,
     @Query('size', new DefaultValuePipe(50), ParseIntPipe) size: number,
+    @Query('scheme') scheme?: 'FBS' | 'DBS',
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
-    return this.fbsService.getOrders(userId, storeId, status, page, size);
+    return this.fbsService.getOrders(userId, storeId, status, page, size, {
+      scheme,
+      dateFrom: dateFrom ? parseInt(dateFrom, 10) : undefined,
+      dateTo: dateTo ? parseInt(dateTo, 10) : undefined,
+    });
+  }
+
+  /** Counts per status — for the Orders page tabs */
+  @Get('orders/counts')
+  getOrderCounts(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.fbsService.getOrderCounts(
+      userId, storeId,
+      dateFrom ? parseInt(dateFrom, 10) : undefined,
+      dateTo ? parseInt(dateTo, 10) : undefined,
+    );
   }
 
   /** All FBS orders across CREATED+PACKING+RETURNED statuses */

@@ -123,7 +123,8 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                 }
             }
         }
-        throw new common_1.ServiceUnavailableException(`Uzum API unavailable after ${this.maxRetries} attempts: ${lastError.message}`);
+        const errMsg = lastError?.message || `rate-limited or unreachable for ${endpoint}`;
+        throw new common_1.ServiceUnavailableException(`Uzum API unavailable after ${this.maxRetries} attempts: ${errMsg}`);
     }
     async getShops(storeId, apiKey) {
         const data = await this.executeWithRetry(storeId, apiKey, '/v1/shops', 'GET', (client) => client.get('/v1/shops'));
@@ -281,11 +282,19 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         const { skuAmountList } = await this.getStocks(storeId, apiKey, shopId);
         return skuAmountList;
     }
-    async getFbsOrders(storeId, apiKey, shopId, status = 'PACKING', page = 0, size = 50) {
-        const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/orders', 'GET', (client) => client.get('/v2/fbs/orders', {
-            params: { shopIds: shopId, status, page, size },
-        }));
-        return { orders: data?.payload?.orders || [] };
+    async getFbsOrders(storeId, apiKey, shopId, status = 'PACKING', page = 0, size = 50, extra = {}) {
+        const params = { shopIds: shopId, status, page, size };
+        if (extra.scheme)
+            params.scheme = extra.scheme;
+        if (extra.dateFrom)
+            params.dateFrom = extra.dateFrom;
+        if (extra.dateTo)
+            params.dateTo = extra.dateTo;
+        const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/orders', 'GET', (client) => client.get('/v2/fbs/orders', { params }));
+        return {
+            orders: data?.payload?.orders || [],
+            totalAmount: data?.payload?.totalAmount,
+        };
     }
     async getAllFbsOrders(storeId, apiKey, shopId, statuses = ['CREATED', 'PACKING', 'RETURNED']) {
         const all = [];
@@ -310,6 +319,29 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             }
         }
         return all;
+    }
+    async getFbsOrderCount(storeId, apiKey, shopId, status, dateFrom, dateTo) {
+        const client = this.buildClient(apiKey);
+        try {
+            const start = Date.now();
+            const response = await client.get('/v2/fbs/orders/count', {
+                params: {
+                    shopIds: shopId,
+                    status,
+                    ...(dateFrom ? { dateFrom } : {}),
+                    ...(dateTo ? { dateTo } : {}),
+                },
+                timeout: 8_000,
+            });
+            const rateInfo = this.extractRateLimitInfo(response.headers);
+            await this.persistRateLimitInfo(storeId, rateInfo).catch(() => { });
+            await this.logApiCall(storeId, '/v2/fbs/orders/count', 'GET', response.status, Date.now() - start, rateInfo).catch(() => { });
+            return response.data?.payload ?? 0;
+        }
+        catch (err) {
+            this.logger.warn(`count failed for status=${status}: ${err.message}`);
+            return 0;
+        }
     }
     async getFbsLabelPdf(storeId, apiKey, orderId, size = 'LARGE') {
         const data = await this.executeWithRetry(storeId, apiKey, `/v1/fbs/order/${orderId}/labels/print`, 'GET', (client) => client.get(`/v1/fbs/order/${orderId}/labels/print`, {

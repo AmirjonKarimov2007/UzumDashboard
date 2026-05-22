@@ -156,10 +156,16 @@ export declare class UzumApiClient {
         skuAmountList: any[];
     }>;
     getAllStocks(storeId: string, apiKey: string, shopId?: string): Promise<any[]>;
-    getFbsOrders(storeId: string, apiKey: string, shopId: string | number, status?: string, page?: number, size?: number): Promise<{
+    getFbsOrders(storeId: string, apiKey: string, shopId: string | number, status?: string, page?: number, size?: number, extra?: {
+        scheme?: 'FBS' | 'DBS';
+        dateFrom?: number;
+        dateTo?: number;
+    }): Promise<{
         orders: any[];
+        totalAmount?: number;
     }>;
     getAllFbsOrders(storeId: string, apiKey: string, shopId: string | number, statuses?: string[]): Promise<any[]>;
+    getFbsOrderCount(storeId: string, apiKey: string, shopId: string | number, status: string, dateFrom?: number, dateTo?: number): Promise<number>;
     getFbsLabelPdf(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
     validateConnection(storeId: string, apiKey: string): Promise<{
         valid: boolean;

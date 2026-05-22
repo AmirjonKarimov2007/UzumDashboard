@@ -7,9 +7,11 @@ declare class BatchLabelsDto {
 export declare class FbsController {
     private readonly fbsService;
     constructor(fbsService: FbsService);
-    getOrders(userId: string, storeId: string, status: string, page: number, size: number): Promise<{
+    getOrders(userId: string, storeId: string, status: string, page: number, size: number, scheme?: 'FBS' | 'DBS', dateFrom?: string, dateTo?: string): Promise<{
         orders: any[];
+        totalAmount?: number;
     }>;
+    getOrderCounts(userId: string, storeId: string, dateFrom?: string, dateTo?: string): Promise<Record<string, number>>;
     getAllOrders(userId: string, storeId: string, statusesParam?: string): Promise<{
         count: number;
         orders: any[];

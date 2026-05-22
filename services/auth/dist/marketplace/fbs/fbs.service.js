@@ -19,10 +19,11 @@ let FbsService = FbsService_1 = class FbsService {
         this.uzumClient = uzumClient;
         this.storesService = storesService;
         this.logger = new common_1.Logger(FbsService_1.name);
+        this.countsCache = new Map();
     }
-    async getOrders(userId, storeId, status = 'PACKING', page = 0, size = 50) {
+    async getOrders(userId, storeId, status = 'PACKING', page = 0, size = 50, extra = {}) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        return this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size);
+        return this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size, extra);
     }
     async getAllOrders(userId, storeId, statuses = ['CREATED', 'PACKING', 'RETURNED']) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
@@ -46,6 +47,39 @@ let FbsService = FbsService_1 = class FbsService {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         const { orderItems, total } = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], { page, size, dateFrom, dateTo });
         return { orderItems, total, page, size };
+    }
+    async getOrderCounts(userId, storeId, dateFrom, dateTo) {
+        const cacheKey = `${storeId}:${dateFrom ?? ''}:${dateTo ?? ''}`;
+        const cached = this.countsCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+            return cached.data;
+        }
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const statuses = [
+            'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
+            'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
+            'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
+        ];
+        const result = {};
+        for (const status of statuses) {
+            result[status] = await this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, status, dateFrom, dateTo);
+            await new Promise((r) => setTimeout(r, 250));
+        }
+        this.countsCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
+        return result;
+    }
+    async getOrdersAdvanced(userId, storeId, params) {
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const { status = 'CREATED', page = 0, size = 20, dateFrom, dateTo, scheme } = params;
+        const queryParams = { shopIds: uzumShopId, status, page, size };
+        if (dateFrom)
+            queryParams.dateFrom = dateFrom;
+        if (dateTo)
+            queryParams.dateTo = dateTo;
+        if (scheme)
+            queryParams.scheme = scheme;
+        const data = await this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size);
+        return { orders: data.orders, page, size, status };
     }
     async getLiveStocks(userId, storeId) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
