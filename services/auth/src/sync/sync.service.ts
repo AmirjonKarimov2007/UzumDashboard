@@ -107,11 +107,19 @@ export class SyncService {
       take: 10,
     });
 
-    const waiting = await this.syncQueue.getWaiting();
-    const active = await this.syncQueue.getActive();
-
-    const storeWaiting = waiting.filter((j) => (j.data as SyncJobData).storeId === storeId);
-    const storeActive = active.filter((j) => (j.data as SyncJobData).storeId === storeId);
+    // Queue inspection — guarded; failures shouldn't break status response
+    let queuedJobs = 0;
+    let activeJobs = 0;
+    try {
+      const [waiting, active] = await Promise.all([
+        this.syncQueue.getWaiting(),
+        this.syncQueue.getActive(),
+      ]);
+      queuedJobs = waiting.filter((j) => (j.data as SyncJobData).storeId === storeId).length;
+      activeJobs = active.filter((j) => (j.data as SyncJobData).storeId === storeId).length;
+    } catch (err) {
+      this.logger.warn(`Queue inspection failed: ${(err as Error).message}`);
+    }
 
     return {
       isConnected: conn?.isConnected ?? false,
@@ -121,8 +129,9 @@ export class SyncService {
       lastSyncError: conn?.lastSyncError,
       rateLimitRemaining: conn?.rateLimitRemaining,
       rateLimitDayRemaining: conn?.rateLimitDayRemaining,
-      queuedJobs: storeWaiting.length,
-      activeJobs: storeActive.length,
+      uzumShopId: conn?.uzumShopId,
+      queuedJobs,
+      activeJobs,
       recentLogs,
     };
   }

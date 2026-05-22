@@ -80,6 +80,10 @@ export declare class StoresService {
         latencyMs?: number;
     }>;
     getDecryptedApiKey(storeId: string): Promise<string | null>;
+    getStoreCredentials(userId: string, storeId: string): Promise<{
+        uzumShopId: string;
+        apiKey: string;
+    }>;
     getConnectionInfo(storeId: string): Promise<{
         id: string;
         createdAt: Date;

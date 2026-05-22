@@ -20,12 +20,12 @@ export class FinanceSyncService {
     dateFrom?: string,
     dateTo?: string,
   ): Promise<number> {
-    const from = dateFrom || format(subDays(new Date(), 90), 'yyyy-MM-dd');
-    const to = dateTo || format(new Date(), 'yyyy-MM-dd');
+    const fromMs = dateFrom ? new Date(dateFrom).getTime() : subDays(new Date(), 90).getTime();
+    const toMs = dateTo ? new Date(dateTo).getTime() : new Date().getTime();
 
-    this.logger.log(`Syncing expenses for store ${storeId} from ${from} to ${to}`);
+    this.logger.log(`Syncing expenses for store ${storeId} from ${dateFrom || 'last 90d'} to ${dateTo || 'now'}`);
 
-    const expenses = await this.uzumClient.getAllExpenses(storeId, apiKey, [uzumShopId], from, to);
+    const expenses = await this.uzumClient.getAllExpenses(storeId, apiKey, [uzumShopId], fromMs, toMs);
 
     if (!expenses.length) return 0;
 

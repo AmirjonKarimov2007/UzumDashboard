@@ -67,9 +67,14 @@ export class AuthService {
       },
     });
 
+    // In dev/console mode, return code so frontend can show it (no real SMS provider)
+    const smsProvider = this.config.get<string>('SMS_PROVIDER') || 'console';
+    const devCode = smsProvider === 'console' ? code : undefined;
+
     return {
       message: 'OTP sent successfully',
       expiresAt,
+      ...(devCode ? { devCode, devMode: true } : {}),
     };
   }
 
@@ -99,20 +104,23 @@ export class AuthService {
           isActive: true,
         },
       });
-
-      // Create default store for new user
-      await this.prisma.store.create({
-        data: {
-          userId: user.id,
-          name: 'My Store',
-          plan: 'FREE',
-          status: 'ACTIVE',
-        },
-      });
     }
 
     if (!user.isActive) {
       throw new UnauthorizedException('Account is deactivated');
+    }
+
+    // Ensure user has at least one store (idempotent — runs for new AND existing users)
+    const storeCount = await this.prisma.store.count({ where: { userId: user.id } });
+    if (storeCount === 0) {
+      await this.prisma.store.create({
+        data: {
+          userId: user.id,
+          name: "Mening do'konim",
+          plan: 'FREE',
+          status: 'ACTIVE',
+        },
+      });
     }
 
     // Generate tokens
@@ -160,6 +168,7 @@ export class AuthService {
       user: {
         id: userWithStores!.id,
         phone: userWithStores!.phone,
+        email: userWithStores!.email,
         name: userWithStores!.name,
         avatar: userWithStores!.avatar,
         stores: userWithStores!.stores,

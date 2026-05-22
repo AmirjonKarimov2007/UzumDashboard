@@ -26,8 +26,8 @@ export declare class FinanceController {
         data: {
             id: string;
             status: import(".prisma/client").$Enums.OrderStatus;
-            profit: import("@prisma/client/runtime/library").Decimal;
             total: import("@prisma/client/runtime/library").Decimal;
+            profit: import("@prisma/client/runtime/library").Decimal;
             uzumOrderId: string;
             commission: import("@prisma/client/runtime/library").Decimal;
             orderedAt: Date | null;

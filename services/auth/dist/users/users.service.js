@@ -29,6 +29,14 @@ let UsersService = class UsersService {
         });
     }
     async updateProfile(userId, data) {
+        if (data.email) {
+            const existing = await this.prisma.user.findFirst({
+                where: { email: data.email, NOT: { id: userId } },
+            });
+            if (existing) {
+                throw new common_1.ConflictException('Bu email boshqa foydalanuvchiga tegishli');
+            }
+        }
         return this.prisma.user.update({
             where: { id: userId },
             data,

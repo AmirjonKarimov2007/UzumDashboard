@@ -108,14 +108,18 @@ export declare class UzumApiClient {
     private logApiCall;
     private executeWithRetry;
     getShops(storeId: string, apiKey: string): Promise<UzumShop[]>;
-    getProducts(storeId: string, apiKey: string, shopId: string, params?: {
+    getProducts(storeId: string, apiKey: string, shopId: string | number, params?: {
         page?: number;
         size?: number;
         filter?: string;
         sortBy?: string;
         order?: string;
-    }): Promise<UzumPaginatedResponse<UzumProduct>>;
-    getAllProducts(storeId: string, apiKey: string, shopId: string): Promise<UzumProduct[]>;
+        searchQuery?: string;
+    }): Promise<{
+        products: any[];
+        total: number;
+    }>;
+    getAllProducts(storeId: string, apiKey: string, shopId: string | number): Promise<any[]>;
     getOrders(storeId: string, apiKey: string, shopIds: string[], params?: {
         page?: number;
         size?: number;
@@ -126,23 +130,37 @@ export declare class UzumApiClient {
     }): Promise<UzumPaginatedResponse<UzumOrder>>;
     getAllOrders(storeId: string, apiKey: string, shopIds: string[], dateFrom?: string, dateTo?: string): Promise<UzumOrder[]>;
     getOrderById(storeId: string, apiKey: string, orderId: string): Promise<UzumOrder>;
-    getFinanceOrders(storeId: string, apiKey: string, shopIds: string[], params?: {
+    getFinanceOrders(storeId: string, apiKey: string, shopIds: (string | number)[], params?: {
         page?: number;
         size?: number;
-        dateFrom?: string;
-        dateTo?: string;
+        dateFrom?: number;
+        dateTo?: number;
         statuses?: string[];
-    }): Promise<UzumPaginatedResponse<UzumFinanceOrder>>;
-    getAllFinanceOrders(storeId: string, apiKey: string, shopIds: string[], dateFrom?: string, dateTo?: string): Promise<UzumFinanceOrder[]>;
-    getExpenses(storeId: string, apiKey: string, shopIds: string[], params?: {
+        group?: boolean;
+    }): Promise<{
+        orderItems: any[];
+        total: number;
+    }>;
+    getAllFinanceOrders(storeId: string, apiKey: string, shopIds: (string | number)[], dateFrom?: number, dateTo?: number): Promise<any[]>;
+    getExpenses(storeId: string, apiKey: string, shopIds: (string | number)[], params?: {
         page?: number;
         size?: number;
-        dateFrom?: string;
-        dateTo?: string;
-    }): Promise<UzumPaginatedResponse<UzumExpense>>;
-    getAllExpenses(storeId: string, apiKey: string, shopIds: string[], dateFrom?: string, dateTo?: string): Promise<UzumExpense[]>;
-    getStocks(storeId: string, apiKey: string, shopId: string, page?: number, size?: number): Promise<UzumPaginatedResponse<UzumStock>>;
-    getAllStocks(storeId: string, apiKey: string, shopId: string): Promise<UzumStock[]>;
+        dateFrom?: number;
+        dateTo?: number;
+        sources?: string[];
+    }): Promise<{
+        payments: any[];
+    }>;
+    getAllExpenses(storeId: string, apiKey: string, shopIds: (string | number)[], dateFrom?: number, dateTo?: number): Promise<any[]>;
+    getStocks(storeId: string, apiKey: string, _shopId?: string, _page?: number, _size?: number): Promise<{
+        skuAmountList: any[];
+    }>;
+    getAllStocks(storeId: string, apiKey: string, shopId?: string): Promise<any[]>;
+    getFbsOrders(storeId: string, apiKey: string, shopId: string | number, status?: string, page?: number, size?: number): Promise<{
+        orders: any[];
+    }>;
+    getAllFbsOrders(storeId: string, apiKey: string, shopId: string | number, statuses?: string[]): Promise<any[]>;
+    getFbsLabelPdf(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
     validateConnection(storeId: string, apiKey: string): Promise<{
         valid: boolean;
         shops: UzumShop[];

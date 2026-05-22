@@ -12,10 +12,10 @@ export declare class OrdersController {
             } & {
                 id: string;
                 name: string;
+                total: import("@prisma/client/runtime/library").Decimal;
                 price: import("@prisma/client/runtime/library").Decimal;
                 uzumSkuId: string;
                 productId: string | null;
-                total: import("@prisma/client/runtime/library").Decimal;
                 orderId: string;
                 quantity: number;
             })[];
@@ -25,9 +25,9 @@ export declare class OrdersController {
             updatedAt: Date;
             status: import(".prisma/client").$Enums.OrderStatus;
             storeId: string;
+            total: import("@prisma/client/runtime/library").Decimal;
             scheme: import(".prisma/client").$Enums.OrderScheme;
             profit: import("@prisma/client/runtime/library").Decimal;
-            total: import("@prisma/client/runtime/library").Decimal;
             customerPhone: string | null;
             customerName: string | null;
             uzumOrderId: string;
@@ -73,9 +73,9 @@ export declare class OrdersController {
         updatedAt: Date;
         status: import(".prisma/client").$Enums.OrderStatus;
         storeId: string;
+        total: import("@prisma/client/runtime/library").Decimal;
         scheme: import(".prisma/client").$Enums.OrderScheme;
         profit: import("@prisma/client/runtime/library").Decimal;
-        total: import("@prisma/client/runtime/library").Decimal;
         customerPhone: string | null;
         customerName: string | null;
         uzumOrderId: string;
@@ -104,10 +104,10 @@ export declare class OrdersController {
         } & {
             id: string;
             name: string;
+            total: import("@prisma/client/runtime/library").Decimal;
             price: import("@prisma/client/runtime/library").Decimal;
             uzumSkuId: string;
             productId: string | null;
-            total: import("@prisma/client/runtime/library").Decimal;
             orderId: string;
             quantity: number;
         })[];
@@ -117,9 +117,9 @@ export declare class OrdersController {
         updatedAt: Date;
         status: import(".prisma/client").$Enums.OrderStatus;
         storeId: string;
+        total: import("@prisma/client/runtime/library").Decimal;
         scheme: import(".prisma/client").$Enums.OrderScheme;
         profit: import("@prisma/client/runtime/library").Decimal;
-        total: import("@prisma/client/runtime/library").Decimal;
         customerPhone: string | null;
         customerName: string | null;
         uzumOrderId: string;

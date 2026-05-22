@@ -60,7 +60,16 @@
       "Bash(powershell -Command \"Stop-Process -Id 23236 -Force\")",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(PGPASSWORD='12345678' psql -U postgres -d uzum_dashboard -c \"SELECT * FROM stores LIMIT 5;\")",
+      "Bash(PGPASSWORD='12345678' psql -U postgres -d uzum_dashboard -c \"\\\\\\\\dt\")",
+      "Bash(findstr :3001)",
+      "Bash(taskkill *.)",
+      "Bash(curl -s http://localhost:3001/marketplace/stores/test/fbs/products?page=0)",
+      "Bash(size=5 2>&1)",
+      "Bash(curl *)",
+      "Bash(taskkill /F /PID 7424)",
+      "Bash(cmd *)"
     ]
   }
 }

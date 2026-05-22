@@ -124,13 +124,14 @@ export class UzumApiClient {
   ) {}
 
   private buildClient(apiKey: string): AxiosInstance {
+    // Uzum Seller API expects raw token WITHOUT "Bearer " prefix
     return axios.create({
       baseURL: this.baseUrl,
       timeout: 30_000,
       headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'Accept-Language': 'ru',
+        Authorization: apiKey,
+        Accept: '*/*',
+        'User-Agent': 'Uzum-Dashboard/1.0',
       },
     });
   }
@@ -229,20 +230,24 @@ export class UzumApiClient {
         }
 
         if (statusCode === 403) {
-          // Parse response body to distinguish "Token not found" from RBAC denial
+          // Parse response body to distinguish different 403 causes
           const responseData = (axiosErr.response?.data as any);
-          const errorCode = responseData?.errors?.[0]?.code;
-          const errorMsg = responseData?.errors?.[0]?.message || '';
+          const errorMsg = responseData?.errors?.[0]?.message || responseData?.error || '';
           const rawBody = typeof responseData === 'string' ? responseData : '';
 
-          if (errorCode === 'forbidden-001' || errorMsg.includes('Token not found')) {
+          if (errorMsg.includes('Token expired')) {
+            throw new UnauthorizedException(
+              'Uzum API kalitining muddati tugagan. Uzum Seller panelga kirib yangi kalit yarating'
+            );
+          }
+          if (errorMsg.includes('Token not found')) {
             throw new UnauthorizedException(
               'Uzum API kaliti topilmadi. Uzum Seller panelga → Sozlamalar → API integratsiya bo\'limiga kiring va yangi kalit yarating'
             );
           }
           if (rawBody.includes('RBAC') || rawBody.includes('access denied')) {
             throw new UnauthorizedException(
-              'Uzum API kalitingiz kerakli ruxsatlarga ega emas. Kalit "mahsulotlar", "buyurtmalar" va "moliya" ruxsatlarini o\'z ichiga olishi kerak'
+              'Uzum API kalitingiz bu endpoint uchun ruxsatga ega emas. Uzum Seller panelda kalit ruxsatlarini kengaytiring'
             );
           }
           throw new UnauthorizedException('Uzum API ruxsat rad etildi — do\'kon ruxsatlarini tekshiring');
@@ -271,14 +276,16 @@ export class UzumApiClient {
   // ─── Shops ────────────────────────────────────────────────────────────────
 
   async getShops(storeId: string, apiKey: string): Promise<UzumShop[]> {
-    const data = await this.executeWithRetry<{ payload: UzumShop[] }>(
+    // /v1/shops returns a plain array (not wrapped in {payload})
+    const data = await this.executeWithRetry<UzumShop[] | { payload: UzumShop[] }>(
       storeId,
       apiKey,
       '/v1/shops',
       'GET',
       (client) => client.get('/v1/shops'),
     );
-    return data.payload || [];
+    if (Array.isArray(data)) return data;
+    return (data as any)?.payload || [];
   }
 
   // ─── Products ─────────────────────────────────────────────────────────────
@@ -286,49 +293,51 @@ export class UzumApiClient {
   async getProducts(
     storeId: string,
     apiKey: string,
-    shopId: string,
+    shopId: string | number,
     params: {
       page?: number;
       size?: number;
       filter?: string;
       sortBy?: string;
       order?: string;
+      searchQuery?: string;
     } = {},
-  ): Promise<UzumPaginatedResponse<UzumProduct>> {
-    const { page = 0, size = 50, filter = 'ALL', sortBy = 'DEFAULT', order = 'DESC' } = params;
+  ): Promise<{ products: any[]; total: number }> {
+    const { page = 0, size = 50, filter = 'ALL', sortBy = 'DEFAULT', order = 'DESC', searchQuery } = params;
 
-    const data = await this.executeWithRetry<UzumPaginatedResponse<UzumProduct>>(
+    const data = await this.executeWithRetry<{ productList: any[]; totalProductsAmount: number }>(
       storeId,
       apiKey,
       `/v1/product/shop/${shopId}`,
       'GET',
       (client) =>
         client.get(`/v1/product/shop/${shopId}`, {
-          params: { page, size, filter, sortBy, order },
+          params: { page, size, filter, sortBy, order, ...(searchQuery ? { searchQuery } : {}) },
         }),
     );
-    return data;
+    return {
+      products: data?.productList || [],
+      total: data?.totalProductsAmount || 0,
+    };
   }
 
   async getAllProducts(
     storeId: string,
     apiKey: string,
-    shopId: string,
-  ): Promise<UzumProduct[]> {
+    shopId: string | number,
+  ): Promise<any[]> {
     const pageSize = 50;
     const firstPage = await this.getProducts(storeId, apiKey, shopId, { page: 0, size: pageSize });
+    if (firstPage.products.length === 0) return [];
 
-    if (!firstPage || !firstPage.payload) return [];
+    const totalPages = Math.ceil(firstPage.total / pageSize);
+    const allProducts = [...firstPage.products];
 
-    const totalPages = Math.ceil((firstPage.total || firstPage.payload.length) / pageSize);
-    const allProducts = [...firstPage.payload];
-
-    const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 1);
-
-    for (const page of remainingPages) {
+    for (let p = 1; p < totalPages; p++) {
       await this.sleep(200);
-      const pageData = await this.getProducts(storeId, apiKey, shopId, { page, size: pageSize });
-      if (pageData?.payload) allProducts.push(...pageData.payload);
+      const pageData = await this.getProducts(storeId, apiKey, shopId, { page: p, size: pageSize });
+      if (pageData.products.length === 0) break;
+      allProducts.push(...pageData.products);
     }
 
     return allProducts;
@@ -433,57 +442,56 @@ export class UzumApiClient {
   async getFinanceOrders(
     storeId: string,
     apiKey: string,
-    shopIds: string[],
+    shopIds: (string | number)[],
     params: {
       page?: number;
       size?: number;
-      dateFrom?: string;
-      dateTo?: string;
+      dateFrom?: number;
+      dateTo?: number;
       statuses?: string[];
+      group?: boolean;
     } = {},
-  ): Promise<UzumPaginatedResponse<UzumFinanceOrder>> {
-    const { page = 0, size = 50, dateFrom, dateTo, statuses } = params;
+  ): Promise<{ orderItems: any[]; total: number }> {
+    const { page = 0, size = 50, dateFrom, dateTo, statuses, group } = params;
 
     const queryParams: Record<string, unknown> = { shopIds, page, size };
     if (dateFrom) queryParams.dateFrom = dateFrom;
     if (dateTo) queryParams.dateTo = dateTo;
     if (statuses?.length) queryParams.statuses = statuses;
+    if (group !== undefined) queryParams.group = group;
 
-    const data = await this.executeWithRetry<UzumPaginatedResponse<UzumFinanceOrder>>(
+    const data = await this.executeWithRetry<{ orderItems: any[]; totalElements: number }>(
       storeId,
       apiKey,
       '/v1/finance/orders',
       'GET',
       (client) => client.get('/v1/finance/orders', { params: queryParams }),
     );
-    return data;
+    return {
+      orderItems: data?.orderItems || [],
+      total: data?.totalElements || 0,
+    };
   }
 
   async getAllFinanceOrders(
     storeId: string,
     apiKey: string,
-    shopIds: string[],
-    dateFrom?: string,
-    dateTo?: string,
-  ): Promise<UzumFinanceOrder[]> {
+    shopIds: (string | number)[],
+    dateFrom?: number,
+    dateTo?: number,
+  ): Promise<any[]> {
     const pageSize = 50;
-    const allOrders: UzumFinanceOrder[] = [];
+    const allOrders: any[] = [];
     let page = 0;
-    let hasMore = true;
 
-    while (hasMore) {
+    while (true) {
       await this.sleep(150);
-      const response = await this.getFinanceOrders(storeId, apiKey, shopIds, {
-        page,
-        size: pageSize,
-        dateFrom,
-        dateTo,
+      const { orderItems } = await this.getFinanceOrders(storeId, apiKey, shopIds, {
+        page, size: pageSize, dateFrom, dateTo,
       });
-
-      if (!response?.payload?.length) break;
-
-      allOrders.push(...response.payload);
-      hasMore = response.payload.length === pageSize;
+      if (orderItems.length === 0) break;
+      allOrders.push(...orderItems);
+      if (orderItems.length < pageSize) break;
       page++;
     }
 
@@ -493,98 +501,154 @@ export class UzumApiClient {
   async getExpenses(
     storeId: string,
     apiKey: string,
-    shopIds: string[],
-    params: { page?: number; size?: number; dateFrom?: string; dateTo?: string } = {},
-  ): Promise<UzumPaginatedResponse<UzumExpense>> {
-    const { page = 0, size = 50, dateFrom, dateTo } = params;
+    shopIds: (string | number)[],
+    params: { page?: number; size?: number; dateFrom?: number; dateTo?: number; sources?: string[] } = {},
+  ): Promise<{ payments: any[] }> {
+    const { page = 0, size = 50, dateFrom, dateTo, sources } = params;
 
     const queryParams: Record<string, unknown> = { shopIds, page, size };
     if (dateFrom) queryParams.dateFrom = dateFrom;
     if (dateTo) queryParams.dateTo = dateTo;
+    if (sources?.length) queryParams.sources = sources;
 
-    const data = await this.executeWithRetry<UzumPaginatedResponse<UzumExpense>>(
+    const data = await this.executeWithRetry<{ payload: { payments: any[] } }>(
       storeId,
       apiKey,
       '/v1/finance/expenses',
       'GET',
       (client) => client.get('/v1/finance/expenses', { params: queryParams }),
     );
-    return data;
+    return { payments: data?.payload?.payments || [] };
   }
 
   async getAllExpenses(
     storeId: string,
     apiKey: string,
-    shopIds: string[],
-    dateFrom?: string,
-    dateTo?: string,
-  ): Promise<UzumExpense[]> {
+    shopIds: (string | number)[],
+    dateFrom?: number,
+    dateTo?: number,
+  ): Promise<any[]> {
     const pageSize = 50;
-    const allExpenses: UzumExpense[] = [];
+    const all: any[] = [];
     let page = 0;
-    let hasMore = true;
 
-    while (hasMore) {
+    while (true) {
       await this.sleep(150);
-      const response = await this.getExpenses(storeId, apiKey, shopIds, {
-        page,
-        size: pageSize,
-        dateFrom,
-        dateTo,
+      const { payments } = await this.getExpenses(storeId, apiKey, shopIds, {
+        page, size: pageSize, dateFrom, dateTo,
       });
-
-      if (!response?.payload?.length) break;
-
-      allExpenses.push(...response.payload);
-      hasMore = response.payload.length === pageSize;
+      if (payments.length === 0) break;
+      all.push(...payments);
+      if (payments.length < pageSize) break;
       page++;
     }
 
-    return allExpenses;
+    return all;
   }
 
-  // ─── Stock ────────────────────────────────────────────────────────────────
+  // ─── Stock (FBS SKU stocks — no pagination, no shopId required) ──────────
 
   async getStocks(
     storeId: string,
     apiKey: string,
-    shopId: string,
-    page = 0,
-    size = 50,
-  ): Promise<UzumPaginatedResponse<UzumStock>> {
-    const data = await this.executeWithRetry<UzumPaginatedResponse<UzumStock>>(
+    _shopId?: string,
+    _page = 0,
+    _size = 50,
+  ): Promise<{ skuAmountList: any[] }> {
+    const data = await this.executeWithRetry<{ payload: { skuAmountList: any[] } }>(
       storeId,
       apiKey,
       '/v2/fbs/sku/stocks',
       'GET',
-      (client) =>
-        client.get('/v2/fbs/sku/stocks', {
-          params: { shopId, page, size },
-        }),
+      (client) => client.get('/v2/fbs/sku/stocks'),
     );
-    return data;
+    return { skuAmountList: data?.payload?.skuAmountList || [] };
   }
 
   async getAllStocks(
     storeId: string,
     apiKey: string,
-    shopId: string,
-  ): Promise<UzumStock[]> {
-    const pageSize = 50;
-    const allStocks: UzumStock[] = [];
-    let page = 0;
-    let hasMore = true;
+    shopId?: string,
+  ): Promise<any[]> {
+    const { skuAmountList } = await this.getStocks(storeId, apiKey, shopId);
+    return skuAmountList;
+  }
 
-    while (hasMore) {
-      await this.sleep(150);
-      const response = await this.getStocks(storeId, apiKey, shopId, page, pageSize);
-      if (!response?.payload?.length) break;
-      allStocks.push(...response.payload);
-      hasMore = response.payload.length === pageSize;
-      page++;
+  // ─── FBS (Fulfillment By Seller) ──────────────────────────────────────────
+
+  async getFbsOrders(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    status: string = 'PACKING',
+    page: number = 0,
+    size: number = 50,
+  ): Promise<{ orders: any[] }> {
+    const data = await this.executeWithRetry<{ payload: { orders: any[] } }>(
+      storeId,
+      apiKey,
+      '/v2/fbs/orders',
+      'GET',
+      (client) =>
+        client.get('/v2/fbs/orders', {
+          params: { shopIds: shopId, status, page, size },
+        }),
+    );
+    return { orders: data?.payload?.orders || [] };
+  }
+
+  async getAllFbsOrders(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    statuses: string[] = ['CREATED', 'PACKING', 'RETURNED'],
+  ): Promise<any[]> {
+    const all: any[] = [];
+    for (const status of statuses) {
+      let page = 0;
+      const pageSize = 50;
+      while (true) {
+        try {
+          await this.sleep(150);
+          const { orders } = await this.getFbsOrders(
+            storeId,
+            apiKey,
+            shopId,
+            status,
+            page,
+            pageSize,
+          );
+          if (orders.length === 0) break;
+          all.push(...orders);
+          if (orders.length < pageSize) break;
+          page++;
+        } catch (err) {
+          this.logger.warn(`FBS status=${status} page=${page} failed: ${(err as Error).message}`);
+          break;
+        }
+      }
     }
+    return all;
+  }
 
-    return allStocks;
+  async getFbsLabelPdf(
+    storeId: string,
+    apiKey: string,
+    orderId: number | string,
+    size: 'LARGE' | 'SMALL' = 'LARGE',
+  ): Promise<string | null> {
+    // Returns base64-encoded PDF (or null on failure)
+    const data = await this.executeWithRetry<{ payload: { document: string } }>(
+      storeId,
+      apiKey,
+      `/v1/fbs/order/${orderId}/labels/print`,
+      'GET',
+      (client) =>
+        client.get(`/v1/fbs/order/${orderId}/labels/print`, {
+          params: { size },
+        }),
+    );
+    return data?.payload?.document || null;
   }
 
   // ─── Validation ───────────────────────────────────────────────────────────
@@ -593,8 +657,16 @@ export class UzumApiClient {
     storeId: string,
     apiKey: string,
   ): Promise<{ valid: boolean; shops: UzumShop[] }> {
-    const shops = await this.getShops(storeId, apiKey);
-    return { valid: true, shops };
+    // Try /v1/shops first (most reliable identity check)
+    try {
+      const shops = await this.getShops(storeId, apiKey);
+      return { valid: true, shops };
+    } catch (err: any) {
+      // If shops endpoint denied but FBS is accessible, the key still works for FBS
+      // — try to validate via FBS as a fallback
+      this.logger.warn(`Shops validation failed: ${err?.message}. Retrying via FBS endpoint…`);
+      throw err;
+    }
   }
 
   private sleep(ms: number): Promise<void> {

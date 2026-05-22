@@ -28,7 +28,18 @@ export class UsersService {
   /**
    * Update user profile
    */
-  async updateProfile(userId: string, data: { name?: string; avatar?: string }) {
+  async updateProfile(
+    userId: string,
+    data: { name?: string; email?: string; avatar?: string },
+  ) {
+    if (data.email) {
+      const existing = await this.prisma.user.findFirst({
+        where: { email: data.email, NOT: { id: userId } },
+      });
+      if (existing) {
+        throw new ConflictException('Bu email boshqa foydalanuvchiga tegishli');
+      }
+    }
     return this.prisma.user.update({
       where: { id: userId },
       data,

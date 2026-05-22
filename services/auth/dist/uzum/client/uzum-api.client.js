@@ -29,9 +29,9 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             baseURL: this.baseUrl,
             timeout: 30_000,
             headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'Accept-Language': 'ru',
+                Authorization: apiKey,
+                Accept: '*/*',
+                'User-Agent': 'Uzum-Dashboard/1.0',
             },
         });
     }
@@ -96,14 +96,16 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                 }
                 if (statusCode === 403) {
                     const responseData = axiosErr.response?.data;
-                    const errorCode = responseData?.errors?.[0]?.code;
-                    const errorMsg = responseData?.errors?.[0]?.message || '';
+                    const errorMsg = responseData?.errors?.[0]?.message || responseData?.error || '';
                     const rawBody = typeof responseData === 'string' ? responseData : '';
-                    if (errorCode === 'forbidden-001' || errorMsg.includes('Token not found')) {
+                    if (errorMsg.includes('Token expired')) {
+                        throw new common_1.UnauthorizedException('Uzum API kalitining muddati tugagan. Uzum Seller panelga kirib yangi kalit yarating');
+                    }
+                    if (errorMsg.includes('Token not found')) {
                         throw new common_1.UnauthorizedException('Uzum API kaliti topilmadi. Uzum Seller panelga → Sozlamalar → API integratsiya bo\'limiga kiring va yangi kalit yarating');
                     }
                     if (rawBody.includes('RBAC') || rawBody.includes('access denied')) {
-                        throw new common_1.UnauthorizedException('Uzum API kalitingiz kerakli ruxsatlarga ega emas. Kalit "mahsulotlar", "buyurtmalar" va "moliya" ruxsatlarini o\'z ichiga olishi kerak');
+                        throw new common_1.UnauthorizedException('Uzum API kalitingiz bu endpoint uchun ruxsatga ega emas. Uzum Seller panelda kalit ruxsatlarini kengaytiring');
                     }
                     throw new common_1.UnauthorizedException('Uzum API ruxsat rad etildi — do\'kon ruxsatlarini tekshiring');
                 }
@@ -125,28 +127,33 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
     }
     async getShops(storeId, apiKey) {
         const data = await this.executeWithRetry(storeId, apiKey, '/v1/shops', 'GET', (client) => client.get('/v1/shops'));
-        return data.payload || [];
+        if (Array.isArray(data))
+            return data;
+        return data?.payload || [];
     }
     async getProducts(storeId, apiKey, shopId, params = {}) {
-        const { page = 0, size = 50, filter = 'ALL', sortBy = 'DEFAULT', order = 'DESC' } = params;
+        const { page = 0, size = 50, filter = 'ALL', sortBy = 'DEFAULT', order = 'DESC', searchQuery } = params;
         const data = await this.executeWithRetry(storeId, apiKey, `/v1/product/shop/${shopId}`, 'GET', (client) => client.get(`/v1/product/shop/${shopId}`, {
-            params: { page, size, filter, sortBy, order },
+            params: { page, size, filter, sortBy, order, ...(searchQuery ? { searchQuery } : {}) },
         }));
-        return data;
+        return {
+            products: data?.productList || [],
+            total: data?.totalProductsAmount || 0,
+        };
     }
     async getAllProducts(storeId, apiKey, shopId) {
         const pageSize = 50;
         const firstPage = await this.getProducts(storeId, apiKey, shopId, { page: 0, size: pageSize });
-        if (!firstPage || !firstPage.payload)
+        if (firstPage.products.length === 0)
             return [];
-        const totalPages = Math.ceil((firstPage.total || firstPage.payload.length) / pageSize);
-        const allProducts = [...firstPage.payload];
-        const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 1);
-        for (const page of remainingPages) {
+        const totalPages = Math.ceil(firstPage.total / pageSize);
+        const allProducts = [...firstPage.products];
+        for (let p = 1; p < totalPages; p++) {
             await this.sleep(200);
-            const pageData = await this.getProducts(storeId, apiKey, shopId, { page, size: pageSize });
-            if (pageData?.payload)
-                allProducts.push(...pageData.payload);
+            const pageData = await this.getProducts(storeId, apiKey, shopId, { page: p, size: pageSize });
+            if (pageData.products.length === 0)
+                break;
+            allProducts.push(...pageData.products);
         }
         return allProducts;
     }
@@ -202,7 +209,7 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         return this.executeWithRetry(storeId, apiKey, `/v1/fbs/order/${orderId}`, 'GET', (client) => client.get(`/v1/fbs/order/${orderId}`));
     }
     async getFinanceOrders(storeId, apiKey, shopIds, params = {}) {
-        const { page = 0, size = 50, dateFrom, dateTo, statuses } = params;
+        const { page = 0, size = 50, dateFrom, dateTo, statuses, group } = params;
         const queryParams = { shopIds, page, size };
         if (dateFrom)
             queryParams.dateFrom = dateFrom;
@@ -210,86 +217,115 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             queryParams.dateTo = dateTo;
         if (statuses?.length)
             queryParams.statuses = statuses;
+        if (group !== undefined)
+            queryParams.group = group;
         const data = await this.executeWithRetry(storeId, apiKey, '/v1/finance/orders', 'GET', (client) => client.get('/v1/finance/orders', { params: queryParams }));
-        return data;
+        return {
+            orderItems: data?.orderItems || [],
+            total: data?.totalElements || 0,
+        };
     }
     async getAllFinanceOrders(storeId, apiKey, shopIds, dateFrom, dateTo) {
         const pageSize = 50;
         const allOrders = [];
         let page = 0;
-        let hasMore = true;
-        while (hasMore) {
+        while (true) {
             await this.sleep(150);
-            const response = await this.getFinanceOrders(storeId, apiKey, shopIds, {
-                page,
-                size: pageSize,
-                dateFrom,
-                dateTo,
+            const { orderItems } = await this.getFinanceOrders(storeId, apiKey, shopIds, {
+                page, size: pageSize, dateFrom, dateTo,
             });
-            if (!response?.payload?.length)
+            if (orderItems.length === 0)
                 break;
-            allOrders.push(...response.payload);
-            hasMore = response.payload.length === pageSize;
+            allOrders.push(...orderItems);
+            if (orderItems.length < pageSize)
+                break;
             page++;
         }
         return allOrders;
     }
     async getExpenses(storeId, apiKey, shopIds, params = {}) {
-        const { page = 0, size = 50, dateFrom, dateTo } = params;
+        const { page = 0, size = 50, dateFrom, dateTo, sources } = params;
         const queryParams = { shopIds, page, size };
         if (dateFrom)
             queryParams.dateFrom = dateFrom;
         if (dateTo)
             queryParams.dateTo = dateTo;
+        if (sources?.length)
+            queryParams.sources = sources;
         const data = await this.executeWithRetry(storeId, apiKey, '/v1/finance/expenses', 'GET', (client) => client.get('/v1/finance/expenses', { params: queryParams }));
-        return data;
+        return { payments: data?.payload?.payments || [] };
     }
     async getAllExpenses(storeId, apiKey, shopIds, dateFrom, dateTo) {
         const pageSize = 50;
-        const allExpenses = [];
+        const all = [];
         let page = 0;
-        let hasMore = true;
-        while (hasMore) {
+        while (true) {
             await this.sleep(150);
-            const response = await this.getExpenses(storeId, apiKey, shopIds, {
-                page,
-                size: pageSize,
-                dateFrom,
-                dateTo,
+            const { payments } = await this.getExpenses(storeId, apiKey, shopIds, {
+                page, size: pageSize, dateFrom, dateTo,
             });
-            if (!response?.payload?.length)
+            if (payments.length === 0)
                 break;
-            allExpenses.push(...response.payload);
-            hasMore = response.payload.length === pageSize;
+            all.push(...payments);
+            if (payments.length < pageSize)
+                break;
             page++;
         }
-        return allExpenses;
+        return all;
     }
-    async getStocks(storeId, apiKey, shopId, page = 0, size = 50) {
-        const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/sku/stocks', 'GET', (client) => client.get('/v2/fbs/sku/stocks', {
-            params: { shopId, page, size },
-        }));
-        return data;
+    async getStocks(storeId, apiKey, _shopId, _page = 0, _size = 50) {
+        const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/sku/stocks', 'GET', (client) => client.get('/v2/fbs/sku/stocks'));
+        return { skuAmountList: data?.payload?.skuAmountList || [] };
     }
     async getAllStocks(storeId, apiKey, shopId) {
-        const pageSize = 50;
-        const allStocks = [];
-        let page = 0;
-        let hasMore = true;
-        while (hasMore) {
-            await this.sleep(150);
-            const response = await this.getStocks(storeId, apiKey, shopId, page, pageSize);
-            if (!response?.payload?.length)
-                break;
-            allStocks.push(...response.payload);
-            hasMore = response.payload.length === pageSize;
-            page++;
+        const { skuAmountList } = await this.getStocks(storeId, apiKey, shopId);
+        return skuAmountList;
+    }
+    async getFbsOrders(storeId, apiKey, shopId, status = 'PACKING', page = 0, size = 50) {
+        const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/orders', 'GET', (client) => client.get('/v2/fbs/orders', {
+            params: { shopIds: shopId, status, page, size },
+        }));
+        return { orders: data?.payload?.orders || [] };
+    }
+    async getAllFbsOrders(storeId, apiKey, shopId, statuses = ['CREATED', 'PACKING', 'RETURNED']) {
+        const all = [];
+        for (const status of statuses) {
+            let page = 0;
+            const pageSize = 50;
+            while (true) {
+                try {
+                    await this.sleep(150);
+                    const { orders } = await this.getFbsOrders(storeId, apiKey, shopId, status, page, pageSize);
+                    if (orders.length === 0)
+                        break;
+                    all.push(...orders);
+                    if (orders.length < pageSize)
+                        break;
+                    page++;
+                }
+                catch (err) {
+                    this.logger.warn(`FBS status=${status} page=${page} failed: ${err.message}`);
+                    break;
+                }
+            }
         }
-        return allStocks;
+        return all;
+    }
+    async getFbsLabelPdf(storeId, apiKey, orderId, size = 'LARGE') {
+        const data = await this.executeWithRetry(storeId, apiKey, `/v1/fbs/order/${orderId}/labels/print`, 'GET', (client) => client.get(`/v1/fbs/order/${orderId}/labels/print`, {
+            params: { size },
+        }));
+        return data?.payload?.document || null;
     }
     async validateConnection(storeId, apiKey) {
-        const shops = await this.getShops(storeId, apiKey);
-        return { valid: true, shops };
+        try {
+            const shops = await this.getShops(storeId, apiKey);
+            return { valid: true, shops };
+        }
+        catch (err) {
+            this.logger.warn(`Shops validation failed: ${err?.message}. Retrying via FBS endpoint…`);
+            throw err;
+        }
     }
     sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));

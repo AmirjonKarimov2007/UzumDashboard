@@ -6,18 +6,21 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.UsersModule = void 0;
+exports.FbsModule = void 0;
 const common_1 = require("@nestjs/common");
-const users_service_1 = require("./users.service");
-const users_controller_1 = require("./controllers/users.controller");
-let UsersModule = class UsersModule {
+const fbs_controller_1 = require("./fbs.controller");
+const fbs_service_1 = require("./fbs.service");
+const uzum_module_1 = require("../../uzum/uzum.module");
+const stores_module_1 = require("../stores/stores.module");
+let FbsModule = class FbsModule {
 };
-exports.UsersModule = UsersModule;
-exports.UsersModule = UsersModule = __decorate([
+exports.FbsModule = FbsModule;
+exports.FbsModule = FbsModule = __decorate([
     (0, common_1.Module)({
-        controllers: [users_controller_1.UsersController],
-        providers: [users_service_1.UsersService],
-        exports: [users_service_1.UsersService],
+        imports: [uzum_module_1.UzumModule, stores_module_1.StoresModule],
+        controllers: [fbs_controller_1.FbsController],
+        providers: [fbs_service_1.FbsService],
+        exports: [fbs_service_1.FbsService],
     })
-], UsersModule);
-//# sourceMappingURL=users.module.js.map
+], FbsModule);
+//# sourceMappingURL=fbs.module.js.map

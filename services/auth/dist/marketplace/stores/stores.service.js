@@ -194,9 +194,24 @@ let StoresService = StoresService_1 = class StoresService {
     }
     async getDecryptedApiKey(storeId) {
         const conn = await this.prisma.storeConnection.findUnique({ where: { storeId } });
-        if (!conn || !conn.isConnected)
+        if (!conn?.apiKeyEncrypted)
             return null;
         return (0, crypto_util_1.decrypt)(conn.apiKeyEncrypted, conn.apiKeyIv, conn.apiKeyTag, this.encryptionSecret);
+    }
+    async getStoreCredentials(userId, storeId) {
+        const store = await this.prisma.store.findFirst({
+            where: { id: storeId, userId },
+            include: { connection: true },
+        });
+        if (!store)
+            throw new common_1.NotFoundException("Do'kon topilmadi");
+        if (!store.connection?.uzumShopId || !store.connection?.apiKeyEncrypted) {
+            throw new common_1.NotFoundException("Do'kon Uzum API'ga ulanmagan. Settings → Do'kon ulanish bo'limidan API kalitni kiriting.");
+        }
+        return {
+            uzumShopId: store.connection.uzumShopId,
+            apiKey: (0, crypto_util_1.decrypt)(store.connection.apiKeyEncrypted, store.connection.apiKeyIv, store.connection.apiKeyTag, this.encryptionSecret),
+        };
     }
     async getConnectionInfo(storeId) {
         return this.prisma.storeConnection.findUnique({ where: { storeId } });

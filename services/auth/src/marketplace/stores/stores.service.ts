@@ -217,11 +217,35 @@ export class StoresService {
     return { healthy: true, shopName: shop?.name, latencyMs };
   }
 
-  // Used internally by sync workers
+  // Used internally by sync workers & FBS service
   async getDecryptedApiKey(storeId: string): Promise<string | null> {
     const conn = await this.prisma.storeConnection.findUnique({ where: { storeId } });
-    if (!conn || !conn.isConnected) return null;
+    if (!conn?.apiKeyEncrypted) return null;
     return decrypt(conn.apiKeyEncrypted, conn.apiKeyIv, conn.apiKeyTag, this.encryptionSecret);
+  }
+
+  // Get both shopId and apiKey for FBS calls — single source of truth
+  async getStoreCredentials(
+    userId: string,
+    storeId: string,
+  ): Promise<{ uzumShopId: string; apiKey: string }> {
+    const store = await this.prisma.store.findFirst({
+      where: { id: storeId, userId },
+      include: { connection: true },
+    });
+    if (!store) throw new NotFoundException("Do'kon topilmadi");
+    if (!store.connection?.uzumShopId || !store.connection?.apiKeyEncrypted) {
+      throw new NotFoundException("Do'kon Uzum API'ga ulanmagan. Settings → Do'kon ulanish bo'limidan API kalitni kiriting.");
+    }
+    return {
+      uzumShopId: store.connection.uzumShopId,
+      apiKey: decrypt(
+        store.connection.apiKeyEncrypted,
+        store.connection.apiKeyIv,
+        store.connection.apiKeyTag,
+        this.encryptionSecret,
+      ),
+    };
   }
 
   async getConnectionInfo(storeId: string) {

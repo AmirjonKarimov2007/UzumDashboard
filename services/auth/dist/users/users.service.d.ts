@@ -50,6 +50,7 @@ export declare class UsersService {
     }) | null>;
     updateProfile(userId: string, data: {
         name?: string;
+        email?: string;
         avatar?: string;
     }): Promise<{
         phone: string;

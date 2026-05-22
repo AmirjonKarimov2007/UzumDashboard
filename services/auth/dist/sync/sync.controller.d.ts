@@ -25,6 +25,7 @@ export declare class SyncController {
         lastSyncError: string | null | undefined;
         rateLimitRemaining: number | null | undefined;
         rateLimitDayRemaining: number | null | undefined;
+        uzumShopId: string | undefined;
         queuedJobs: number;
         activeJobs: number;
         recentLogs: {

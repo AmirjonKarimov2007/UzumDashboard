@@ -16,6 +16,7 @@ import { OrdersModule } from './marketplace/orders/orders.module';
 import { FinanceModule } from './marketplace/finance/finance.module';
 import { AnalyticsModule } from './marketplace/analytics/analytics.module';
 import { InventoryModule } from './marketplace/inventory/inventory.module';
+import { FbsModule } from './marketplace/fbs/fbs.module';
 import { SyncModule } from './sync/sync.module';
 
 @Module({
@@ -53,6 +54,7 @@ import { SyncModule } from './sync/sync.module';
     FinanceModule,
     AnalyticsModule,
     InventoryModule,
+    FbsModule,
     SyncModule,
   ],
 })

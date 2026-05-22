@@ -51,9 +51,12 @@ let AuthService = class AuthService {
                 metadata: { phone },
             },
         });
+        const smsProvider = this.config.get('SMS_PROVIDER') || 'console';
+        const devCode = smsProvider === 'console' ? code : undefined;
         return {
             message: 'OTP sent successfully',
             expiresAt,
+            ...(devCode ? { devCode, devMode: true } : {}),
         };
     }
     async verifyOtp(dto) {
@@ -69,17 +72,20 @@ let AuthService = class AuthService {
                     isActive: true,
                 },
             });
+        }
+        if (!user.isActive) {
+            throw new common_1.UnauthorizedException('Account is deactivated');
+        }
+        const storeCount = await this.prisma.store.count({ where: { userId: user.id } });
+        if (storeCount === 0) {
             await this.prisma.store.create({
                 data: {
                     userId: user.id,
-                    name: 'My Store',
+                    name: "Mening do'konim",
                     plan: 'FREE',
                     status: 'ACTIVE',
                 },
             });
-        }
-        if (!user.isActive) {
-            throw new common_1.UnauthorizedException('Account is deactivated');
         }
         const { accessToken, refreshToken } = await this.generateTokens(user);
         await this.sessionService.createSession({
@@ -114,6 +120,7 @@ let AuthService = class AuthService {
             user: {
                 id: userWithStores.id,
                 phone: userWithStores.phone,
+                email: userWithStores.email,
                 name: userWithStores.name,
                 avatar: userWithStores.avatar,
                 stores: userWithStores.stores,

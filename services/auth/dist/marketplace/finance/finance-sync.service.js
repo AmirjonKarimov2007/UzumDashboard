@@ -22,10 +22,10 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         this.logger = new common_1.Logger(FinanceSyncService_1.name);
     }
     async syncExpenses(storeId, uzumShopId, apiKey, dateFrom, dateTo) {
-        const from = dateFrom || (0, date_fns_1.format)((0, date_fns_1.subDays)(new Date(), 90), 'yyyy-MM-dd');
-        const to = dateTo || (0, date_fns_1.format)(new Date(), 'yyyy-MM-dd');
-        this.logger.log(`Syncing expenses for store ${storeId} from ${from} to ${to}`);
-        const expenses = await this.uzumClient.getAllExpenses(storeId, apiKey, [uzumShopId], from, to);
+        const fromMs = dateFrom ? new Date(dateFrom).getTime() : (0, date_fns_1.subDays)(new Date(), 90).getTime();
+        const toMs = dateTo ? new Date(dateTo).getTime() : new Date().getTime();
+        this.logger.log(`Syncing expenses for store ${storeId} from ${dateFrom || 'last 90d'} to ${dateTo || 'now'}`);
+        const expenses = await this.uzumClient.getAllExpenses(storeId, apiKey, [uzumShopId], fromMs, toMs);
         if (!expenses.length)
             return 0;
         let synced = 0;
