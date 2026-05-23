@@ -79,5 +79,6 @@ export declare class FbsService {
             title: string;
             amount: number;
         }[];
+        failedOrders: number;
     }>;
 }

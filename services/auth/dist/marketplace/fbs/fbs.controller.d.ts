@@ -63,6 +63,7 @@ export declare class FbsController {
             title: string;
             amount: number;
         }[];
+        failedOrders: number;
     }>;
 }
 export {};

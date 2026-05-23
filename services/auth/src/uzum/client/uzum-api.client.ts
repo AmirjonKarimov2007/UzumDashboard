@@ -775,7 +775,9 @@ export class UzumApiClient {
     size: 'LARGE' | 'SMALL' = 'LARGE',
   ): Promise<string | null> {
     const client = this.buildClient(apiKey);
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    const backoffMs = [0, 1000, 2500]; // 3 attempts total
+    for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+      if (backoffMs[attempt] > 0) await this.sleep(backoffMs[attempt]);
       try {
         const response = await client.get(`/v1/fbs/order/${orderId}/labels/print`, {
           params: { size },
@@ -784,11 +786,11 @@ export class UzumApiClient {
         return response.data?.payload?.document || null;
       } catch (err: any) {
         const code = err?.response?.status;
-        if (code === 429 && attempt === 1) {
-          await this.sleep(2000);
+        // 429/400/503 are transient and worth retrying
+        if ((code === 429 || code === 400 || code === 503) && attempt < backoffMs.length - 1) {
           continue;
         }
-        this.logger.warn(`label fast fetch failed for ${orderId}: ${err?.message}`);
+        this.logger.warn(`label fast fetch failed for ${orderId} (attempt ${attempt + 1}, code=${code}): ${err?.message}`);
         return null;
       }
     }

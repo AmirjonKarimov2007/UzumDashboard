@@ -178,28 +178,39 @@ export class FbsService {
     size: 'LARGE' | 'SMALL' = 'LARGE',
   ) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    // Parallelize in batches of 4 to stay under Uzum's rate limit while
-    // dramatically improving speed vs strict sequential (4 in parallel ≈
-    // single request latency for the whole batch)
-    const BATCH_SIZE = 4;
+
+    const fetchOne = async (orderId: number | string) => {
+      try {
+        const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
+        return { orderId, ok: !!base64, document: base64 };
+      } catch (err: any) {
+        return { orderId, ok: false, error: err?.message, document: null as string | null };
+      }
+    };
+
+    // Pass 1: parallel in batches of 4, 200ms gap
     const results: Array<{ orderId: any; ok: boolean; document?: string | null; error?: string }> = [];
+    const BATCH_SIZE = 4;
     for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
       const batch = orderIds.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(
-        batch.map(async (orderId) => {
-          try {
-            const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
-            return { orderId, ok: !!base64, document: base64 };
-          } catch (err: any) {
-            return { orderId, ok: false, error: err?.message };
-          }
-        }),
-      );
+      const batchResults = await Promise.all(batch.map(fetchOne));
       results.push(...batchResults);
       if (i + BATCH_SIZE < orderIds.length) {
         await new Promise((r) => setTimeout(r, 200));
       }
     }
+
+    // Retry passes for failed orders — sequential with growing backoff
+    for (let pass = 0; pass < 2; pass++) {
+      const failedIdx = results.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
+      if (failedIdx.length === 0) break;
+      this.logger.log(`Label retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
+      for (const idx of failedIdx) {
+        await new Promise((r) => setTimeout(r, 800 + pass * 500));
+        results[idx] = await fetchOne(results[idx].orderId);
+      }
+    }
+
     return {
       total: results.length,
       success: results.filter((r) => r.ok).length,
@@ -211,36 +222,55 @@ export class FbsService {
   /** Returns barcodes for each order item, flattened by amount.
    * Used by the QR code printing feature on the frontend. */
   async getOrderItemBarcodes(userId: string, storeId: string, orderIds: (number | string)[]) {
-    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    // Fetch each order in parallel, batches of 4
-    const items: Array<{ orderId: number; itemId: number; barcode: string; skuTitle: string; title: string; amount: number }> = [];
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const client = (this.uzumClient as any).buildClient(apiKey);
+
+    type Item = { orderId: number; itemId: number; barcode: string; skuTitle: string; title: string; amount: number };
+    const fetchOne = async (orderId: number | string): Promise<{ ok: boolean; items: Item[] }> => {
+      try {
+        const res = await client.get(`/v1/fbs/order/${orderId}`, { timeout: 8_000 });
+        const order = res.data?.payload;
+        const items = (order?.orderItems || []).map((it: any) => ({
+          orderId: Number(orderId),
+          itemId: it.id,
+          barcode: String(it.barcode || ''),
+          skuTitle: it.skuTitle || '',
+          title: it.title || '',
+          amount: it.amount || 1,
+        }));
+        return { ok: true, items };
+      } catch {
+        return { ok: false, items: [] };
+      }
+    };
+
+    // Pass 1: parallel batches of 4
+    const perOrder: Array<{ orderId: number | string; ok: boolean; items: Item[] }> = orderIds.map((id) => ({ orderId: id, ok: false, items: [] }));
     const BATCH = 4;
     for (let i = 0; i < orderIds.length; i += BATCH) {
       const batch = orderIds.slice(i, i + BATCH);
-      const batchResults = await Promise.all(
-        batch.map(async (orderId) => {
-          // Fetch single order via FBS orders endpoint by status — fallback: use cached order data via storesService
-          // Simpler: fetch the order via /v1/fbs/order/{orderId} which returns full info
-          try {
-            const client = (this.uzumClient as any).buildClient(apiKey);
-            const res = await client.get(`/v1/fbs/order/${orderId}`, { timeout: 8_000 });
-            const order = res.data?.payload;
-            return (order?.orderItems || []).map((it: any) => ({
-              orderId: Number(orderId),
-              itemId: it.id,
-              barcode: String(it.barcode || ''),
-              skuTitle: it.skuTitle || '',
-              title: it.title || '',
-              amount: it.amount || 1,
-            }));
-          } catch {
-            return [];
-          }
-        }),
-      );
-      batchResults.forEach((arr) => items.push(...arr));
+      const results = await Promise.all(batch.map(fetchOne));
+      results.forEach((r, k) => { perOrder[i + k] = { orderId: batch[k], ...r }; });
       if (i + BATCH < orderIds.length) await new Promise((r) => setTimeout(r, 200));
     }
-    return { items };
+
+    // Retry failed orders — sequential with backoff
+    for (let pass = 0; pass < 2; pass++) {
+      const failedIdx = perOrder.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
+      if (failedIdx.length === 0) break;
+      this.logger.log(`Barcode retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
+      for (const idx of failedIdx) {
+        await new Promise((r) => setTimeout(r, 800 + pass * 500));
+        const r = await fetchOne(perOrder[idx].orderId);
+        perOrder[idx] = { orderId: perOrder[idx].orderId, ...r };
+      }
+    }
+
+    const items = perOrder.flatMap((r) => r.items);
+    const failed = perOrder.filter((r) => !r.ok).length;
+    if (failed > 0) {
+      this.logger.warn(`Barcode batch: ${failed}/${orderIds.length} orders failed after retries`);
+    }
+    return { items, failedOrders: failed };
   }
 }

@@ -402,7 +402,10 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
     }
     async getFbsLabelPdfFast(storeId, apiKey, orderId, size = 'LARGE') {
         const client = this.buildClient(apiKey);
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        const backoffMs = [0, 1000, 2500];
+        for (let attempt = 0; attempt < backoffMs.length; attempt++) {
+            if (backoffMs[attempt] > 0)
+                await this.sleep(backoffMs[attempt]);
             try {
                 const response = await client.get(`/v1/fbs/order/${orderId}/labels/print`, {
                     params: { size },
@@ -412,11 +415,10 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             }
             catch (err) {
                 const code = err?.response?.status;
-                if (code === 429 && attempt === 1) {
-                    await this.sleep(2000);
+                if ((code === 429 || code === 400 || code === 503) && attempt < backoffMs.length - 1) {
                     continue;
                 }
-                this.logger.warn(`label fast fetch failed for ${orderId}: ${err?.message}`);
+                this.logger.warn(`label fast fetch failed for ${orderId} (attempt ${attempt + 1}, code=${code}): ${err?.message}`);
                 return null;
             }
         }

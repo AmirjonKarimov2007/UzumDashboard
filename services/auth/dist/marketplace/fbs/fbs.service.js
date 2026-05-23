@@ -107,22 +107,33 @@ let FbsService = FbsService_1 = class FbsService {
     }
     async getBatchLabelsPdf(userId, storeId, orderIds, size = 'LARGE') {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const BATCH_SIZE = 4;
+        const fetchOne = async (orderId) => {
+            try {
+                const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
+                return { orderId, ok: !!base64, document: base64 };
+            }
+            catch (err) {
+                return { orderId, ok: false, error: err?.message, document: null };
+            }
+        };
         const results = [];
+        const BATCH_SIZE = 4;
         for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
             const batch = orderIds.slice(i, i + BATCH_SIZE);
-            const batchResults = await Promise.all(batch.map(async (orderId) => {
-                try {
-                    const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
-                    return { orderId, ok: !!base64, document: base64 };
-                }
-                catch (err) {
-                    return { orderId, ok: false, error: err?.message };
-                }
-            }));
+            const batchResults = await Promise.all(batch.map(fetchOne));
             results.push(...batchResults);
             if (i + BATCH_SIZE < orderIds.length) {
                 await new Promise((r) => setTimeout(r, 200));
+            }
+        }
+        for (let pass = 0; pass < 2; pass++) {
+            const failedIdx = results.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
+            if (failedIdx.length === 0)
+                break;
+            this.logger.log(`Label retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
+            for (const idx of failedIdx) {
+                await new Promise((r) => setTimeout(r, 800 + pass * 500));
+                results[idx] = await fetchOne(results[idx].orderId);
             }
         }
         return {
@@ -133,34 +144,52 @@ let FbsService = FbsService_1 = class FbsService {
         };
     }
     async getOrderItemBarcodes(userId, storeId, orderIds) {
-        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const items = [];
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const client = this.uzumClient.buildClient(apiKey);
+        const fetchOne = async (orderId) => {
+            try {
+                const res = await client.get(`/v1/fbs/order/${orderId}`, { timeout: 8_000 });
+                const order = res.data?.payload;
+                const items = (order?.orderItems || []).map((it) => ({
+                    orderId: Number(orderId),
+                    itemId: it.id,
+                    barcode: String(it.barcode || ''),
+                    skuTitle: it.skuTitle || '',
+                    title: it.title || '',
+                    amount: it.amount || 1,
+                }));
+                return { ok: true, items };
+            }
+            catch {
+                return { ok: false, items: [] };
+            }
+        };
+        const perOrder = orderIds.map((id) => ({ orderId: id, ok: false, items: [] }));
         const BATCH = 4;
         for (let i = 0; i < orderIds.length; i += BATCH) {
             const batch = orderIds.slice(i, i + BATCH);
-            const batchResults = await Promise.all(batch.map(async (orderId) => {
-                try {
-                    const client = this.uzumClient.buildClient(apiKey);
-                    const res = await client.get(`/v1/fbs/order/${orderId}`, { timeout: 8_000 });
-                    const order = res.data?.payload;
-                    return (order?.orderItems || []).map((it) => ({
-                        orderId: Number(orderId),
-                        itemId: it.id,
-                        barcode: String(it.barcode || ''),
-                        skuTitle: it.skuTitle || '',
-                        title: it.title || '',
-                        amount: it.amount || 1,
-                    }));
-                }
-                catch {
-                    return [];
-                }
-            }));
-            batchResults.forEach((arr) => items.push(...arr));
+            const results = await Promise.all(batch.map(fetchOne));
+            results.forEach((r, k) => { perOrder[i + k] = { orderId: batch[k], ...r }; });
             if (i + BATCH < orderIds.length)
                 await new Promise((r) => setTimeout(r, 200));
         }
-        return { items };
+        for (let pass = 0; pass < 2; pass++) {
+            const failedIdx = perOrder.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
+            if (failedIdx.length === 0)
+                break;
+            this.logger.log(`Barcode retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
+            for (const idx of failedIdx) {
+                await new Promise((r) => setTimeout(r, 800 + pass * 500));
+                const r = await fetchOne(perOrder[idx].orderId);
+                perOrder[idx] = { orderId: perOrder[idx].orderId, ...r };
+            }
+        }
+        const items = perOrder.flatMap((r) => r.items);
+        const failed = perOrder.filter((r) => !r.ok).length;
+        if (failed > 0) {
+            this.logger.warn(`Barcode batch: ${failed}/${orderIds.length} orders failed after retries`);
+        }
+        return { items, failedOrders: failed };
     }
 };
 exports.FbsService = FbsService;
