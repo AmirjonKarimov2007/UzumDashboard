@@ -133,6 +133,14 @@ export class FbsService {
     return { orders: data.orders, page, size, status };
   }
 
+  async confirmOrder(userId: string, storeId: string, orderId: number | string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const result = await this.uzumClient.confirmFbsOrder(storeId, apiKey, orderId);
+    // Invalidate counts cache so the tab badge updates immediately
+    this.countsCache.clear();
+    return result;
+  }
+
   // ─── FBS Invoices (Ta'minlashlar) ────────────────────────────────────
 
   async getInvoices(
@@ -170,18 +178,27 @@ export class FbsService {
     size: 'LARGE' | 'SMALL' = 'LARGE',
   ) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    // Sequential with small gap to stay under Uzum's rate limit; each request
-    // is single-shot so failures fail fast (no 60s retry-after stalls)
+    // Parallelize in batches of 4 to stay under Uzum's rate limit while
+    // dramatically improving speed vs strict sequential (4 in parallel ≈
+    // single request latency for the whole batch)
+    const BATCH_SIZE = 4;
     const results: Array<{ orderId: any; ok: boolean; document?: string | null; error?: string }> = [];
-    for (const orderId of orderIds) {
-      try {
-        const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
-        results.push({ orderId, ok: !!base64, document: base64 });
-      } catch (err: any) {
-        this.logger.warn(`Label fetch failed for order ${orderId}: ${err?.message}`);
-        results.push({ orderId, ok: false, error: err?.message });
+    for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
+      const batch = orderIds.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (orderId) => {
+          try {
+            const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
+            return { orderId, ok: !!base64, document: base64 };
+          } catch (err: any) {
+            return { orderId, ok: false, error: err?.message };
+          }
+        }),
+      );
+      results.push(...batchResults);
+      if (i + BATCH_SIZE < orderIds.length) {
+        await new Promise((r) => setTimeout(r, 200));
       }
-      await new Promise((r) => setTimeout(r, 150));
     }
     return {
       total: results.length,
@@ -189,5 +206,41 @@ export class FbsService {
       failed: results.filter((r) => !r.ok).length,
       results,
     };
+  }
+
+  /** Returns barcodes for each order item, flattened by amount.
+   * Used by the QR code printing feature on the frontend. */
+  async getOrderItemBarcodes(userId: string, storeId: string, orderIds: (number | string)[]) {
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    // Fetch each order in parallel, batches of 4
+    const items: Array<{ orderId: number; itemId: number; barcode: string; skuTitle: string; title: string; amount: number }> = [];
+    const BATCH = 4;
+    for (let i = 0; i < orderIds.length; i += BATCH) {
+      const batch = orderIds.slice(i, i + BATCH);
+      const batchResults = await Promise.all(
+        batch.map(async (orderId) => {
+          // Fetch single order via FBS orders endpoint by status — fallback: use cached order data via storesService
+          // Simpler: fetch the order via /v1/fbs/order/{orderId} which returns full info
+          try {
+            const client = (this.uzumClient as any).buildClient(apiKey);
+            const res = await client.get(`/v1/fbs/order/${orderId}`, { timeout: 8_000 });
+            const order = res.data?.payload;
+            return (order?.orderItems || []).map((it: any) => ({
+              orderId: Number(orderId),
+              itemId: it.id,
+              barcode: String(it.barcode || ''),
+              skuTitle: it.skuTitle || '',
+              title: it.title || '',
+              amount: it.amount || 1,
+            }));
+          } catch {
+            return [];
+          }
+        }),
+      );
+      batchResults.forEach((arr) => items.push(...arr));
+      if (i + BATCH < orderIds.length) await new Promise((r) => setTimeout(r, 200));
+    }
+    return { items };
   }
 }

@@ -16,6 +16,11 @@ export declare class FbsController {
         count: number;
         orders: any[];
     }>;
+    confirmOrder(userId: string, storeId: string, orderId: string): Promise<{
+        ok: boolean;
+        order?: any;
+        error?: string;
+    }>;
     getInvoices(userId: string, storeId: string, statusesParam?: string, page?: number, size?: number): Promise<{
         invoices: any[];
     }>;
@@ -47,6 +52,16 @@ export declare class FbsController {
             ok: boolean;
             document?: string | null;
             error?: string;
+        }[];
+    }>;
+    getBatchBarcodes(userId: string, storeId: string, dto: BatchLabelsDto): Promise<{
+        items: {
+            orderId: number;
+            itemId: number;
+            barcode: string;
+            skuTitle: string;
+            title: string;
+            amount: number;
         }[];
     }>;
 }

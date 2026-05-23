@@ -672,6 +672,24 @@ export class UzumApiClient {
     return 0;
   }
 
+  /** Confirm a CREATED order — moves it to PACKING status */
+  async confirmFbsOrder(
+    storeId: string,
+    apiKey: string,
+    orderId: number | string,
+  ): Promise<{ ok: boolean; order?: any; error?: string }> {
+    const client = this.buildClient(apiKey);
+    try {
+      const response = await client.post(`/v1/fbs/order/${orderId}/confirm`, undefined, { timeout: 10_000 });
+      return { ok: true, order: response.data?.payload };
+    } catch (err: any) {
+      const code = err?.response?.data?.errors?.[0]?.code || err?.response?.status;
+      const message = err?.response?.data?.errors?.[0]?.message || err?.message;
+      this.logger.warn(`confirmFbsOrder ${orderId} failed: ${code} — ${message}`);
+      return { ok: false, error: message };
+    }
+  }
+
   // ─── FBS Invoices (Ta'minlashlar) ──────────────────────────────────────
 
   async getFbsInvoices(

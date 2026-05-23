@@ -76,6 +76,16 @@ export class FbsController {
     return this.fbsService.getAllOrders(userId, storeId, statuses);
   }
 
+  /** Confirm a CREATED order — moves it to PACKING */
+  @Post('orders/:orderId/confirm')
+  confirmOrder(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fbsService.confirmOrder(userId, storeId, orderId);
+  }
+
   // ─── Invoices (Ta'minlashlar) ────────────────────────────────────────
 
   @Get('invoices')
@@ -172,5 +182,15 @@ export class FbsController {
     @Body() dto: BatchLabelsDto,
   ) {
     return this.fbsService.getBatchLabelsPdf(userId, storeId, dto.orderIds, dto.size || 'LARGE');
+  }
+
+  /** Flat list of barcodes for a set of orders (used for QR-code printing) */
+  @Post('barcodes/batch')
+  getBatchBarcodes(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: BatchLabelsDto,
+  ) {
+    return this.fbsService.getOrderItemBarcodes(userId, storeId, dto.orderIds);
   }
 }

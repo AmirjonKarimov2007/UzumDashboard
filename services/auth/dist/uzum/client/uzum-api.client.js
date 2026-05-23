@@ -345,6 +345,19 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         }
         return 0;
     }
+    async confirmFbsOrder(storeId, apiKey, orderId) {
+        const client = this.buildClient(apiKey);
+        try {
+            const response = await client.post(`/v1/fbs/order/${orderId}/confirm`, undefined, { timeout: 10_000 });
+            return { ok: true, order: response.data?.payload };
+        }
+        catch (err) {
+            const code = err?.response?.data?.errors?.[0]?.code || err?.response?.status;
+            const message = err?.response?.data?.errors?.[0]?.message || err?.message;
+            this.logger.warn(`confirmFbsOrder ${orderId} failed: ${code} — ${message}`);
+            return { ok: false, error: message };
+        }
+    }
     async getFbsInvoices(storeId, apiKey, statuses = ['CREATED', 'ACCEPTANCE_IN_PROGRESS', 'ACCEPTED', 'CANCELLED'], page = 0, size = 20) {
         const client = this.buildClient(apiKey);
         const safeSize = Math.min(Math.max(size, 1), 20);

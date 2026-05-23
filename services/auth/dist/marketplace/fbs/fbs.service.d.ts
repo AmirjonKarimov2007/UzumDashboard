@@ -43,6 +43,11 @@ export declare class FbsService {
         size: number;
         status: string;
     }>;
+    confirmOrder(userId: string, storeId: string, orderId: number | string): Promise<{
+        ok: boolean;
+        order?: any;
+        error?: string;
+    }>;
     getInvoices(userId: string, storeId: string, statuses?: string[], page?: number, size?: number): Promise<{
         invoices: any[];
     }>;
@@ -63,6 +68,16 @@ export declare class FbsService {
             ok: boolean;
             document?: string | null;
             error?: string;
+        }[];
+    }>;
+    getOrderItemBarcodes(userId: string, storeId: string, orderIds: (number | string)[]): Promise<{
+        items: {
+            orderId: number;
+            itemId: number;
+            barcode: string;
+            skuTitle: string;
+            title: string;
+            amount: number;
         }[];
     }>;
 }

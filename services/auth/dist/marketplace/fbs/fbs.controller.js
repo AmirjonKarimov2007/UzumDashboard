@@ -47,6 +47,9 @@ let FbsController = class FbsController {
         const statuses = statusesParam ? statusesParam.split(',') : undefined;
         return this.fbsService.getAllOrders(userId, storeId, statuses);
     }
+    confirmOrder(userId, storeId, orderId) {
+        return this.fbsService.confirmOrder(userId, storeId, orderId);
+    }
     getInvoices(userId, storeId, statusesParam, page, size) {
         const statuses = statusesParam ? statusesParam.split(',') : undefined;
         return this.fbsService.getInvoices(userId, storeId, statuses, page, size);
@@ -77,6 +80,9 @@ let FbsController = class FbsController {
     }
     getBatchLabels(userId, storeId, dto) {
         return this.fbsService.getBatchLabelsPdf(userId, storeId, dto.orderIds, dto.size || 'LARGE');
+    }
+    getBatchBarcodes(userId, storeId, dto) {
+        return this.fbsService.getOrderItemBarcodes(userId, storeId, dto.orderIds);
     }
 };
 exports.FbsController = FbsController;
@@ -113,6 +119,15 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getAllOrders", null);
+__decorate([
+    (0, common_1.Post)('orders/:orderId/confirm'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('orderId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "confirmOrder", null);
 __decorate([
     (0, common_1.Get)('invoices'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
@@ -196,6 +211,15 @@ __decorate([
     __metadata("design:paramtypes", [String, String, BatchLabelsDto]),
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getBatchLabels", null);
+__decorate([
+    (0, common_1.Post)('barcodes/batch'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, BatchLabelsDto]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getBatchBarcodes", null);
 exports.FbsController = FbsController = __decorate([
     (0, common_1.Controller)('marketplace/stores/:storeId/fbs'),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),

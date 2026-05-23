@@ -81,6 +81,12 @@ let FbsService = FbsService_1 = class FbsService {
         const data = await this.uzumClient.getFbsOrders(storeId, apiKey, uzumShopId, status, page, size);
         return { orders: data.orders, page, size, status };
     }
+    async confirmOrder(userId, storeId, orderId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const result = await this.uzumClient.confirmFbsOrder(storeId, apiKey, orderId);
+        this.countsCache.clear();
+        return result;
+    }
     async getInvoices(userId, storeId, statuses, page = 0, size = 20) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         return this.uzumClient.getFbsInvoices(storeId, apiKey, statuses, page, size);
@@ -101,17 +107,23 @@ let FbsService = FbsService_1 = class FbsService {
     }
     async getBatchLabelsPdf(userId, storeId, orderIds, size = 'LARGE') {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const BATCH_SIZE = 4;
         const results = [];
-        for (const orderId of orderIds) {
-            try {
-                const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
-                results.push({ orderId, ok: !!base64, document: base64 });
+        for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
+            const batch = orderIds.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(batch.map(async (orderId) => {
+                try {
+                    const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
+                    return { orderId, ok: !!base64, document: base64 };
+                }
+                catch (err) {
+                    return { orderId, ok: false, error: err?.message };
+                }
+            }));
+            results.push(...batchResults);
+            if (i + BATCH_SIZE < orderIds.length) {
+                await new Promise((r) => setTimeout(r, 200));
             }
-            catch (err) {
-                this.logger.warn(`Label fetch failed for order ${orderId}: ${err?.message}`);
-                results.push({ orderId, ok: false, error: err?.message });
-            }
-            await new Promise((r) => setTimeout(r, 150));
         }
         return {
             total: results.length,
@@ -119,6 +131,36 @@ let FbsService = FbsService_1 = class FbsService {
             failed: results.filter((r) => !r.ok).length,
             results,
         };
+    }
+    async getOrderItemBarcodes(userId, storeId, orderIds) {
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const items = [];
+        const BATCH = 4;
+        for (let i = 0; i < orderIds.length; i += BATCH) {
+            const batch = orderIds.slice(i, i + BATCH);
+            const batchResults = await Promise.all(batch.map(async (orderId) => {
+                try {
+                    const client = this.uzumClient.buildClient(apiKey);
+                    const res = await client.get(`/v1/fbs/order/${orderId}`, { timeout: 8_000 });
+                    const order = res.data?.payload;
+                    return (order?.orderItems || []).map((it) => ({
+                        orderId: Number(orderId),
+                        itemId: it.id,
+                        barcode: String(it.barcode || ''),
+                        skuTitle: it.skuTitle || '',
+                        title: it.title || '',
+                        amount: it.amount || 1,
+                    }));
+                }
+                catch {
+                    return [];
+                }
+            }));
+            batchResults.forEach((arr) => items.push(...arr));
+            if (i + BATCH < orderIds.length)
+                await new Promise((r) => setTimeout(r, 200));
+        }
+        return { items };
     }
 };
 exports.FbsService = FbsService;
