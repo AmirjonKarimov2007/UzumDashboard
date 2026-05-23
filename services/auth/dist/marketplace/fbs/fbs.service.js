@@ -117,22 +117,21 @@ let FbsService = FbsService_1 = class FbsService {
             }
         };
         const results = [];
-        const BATCH_SIZE = 4;
-        for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
-            const batch = orderIds.slice(i, i + BATCH_SIZE);
+        const CONCURRENCY = 4;
+        for (let i = 0; i < orderIds.length; i += CONCURRENCY) {
+            const batch = orderIds.slice(i, i + CONCURRENCY);
             const batchResults = await Promise.all(batch.map(fetchOne));
             results.push(...batchResults);
-            if (i + BATCH_SIZE < orderIds.length) {
-                await new Promise((r) => setTimeout(r, 200));
-            }
+            if (i + CONCURRENCY < orderIds.length)
+                await new Promise((r) => setTimeout(r, 100));
         }
-        for (let pass = 0; pass < 2; pass++) {
+        for (let pass = 0; pass < 3; pass++) {
             const failedIdx = results.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
             if (failedIdx.length === 0)
                 break;
             this.logger.log(`Label retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
             for (const idx of failedIdx) {
-                await new Promise((r) => setTimeout(r, 800 + pass * 500));
+                await new Promise((r) => setTimeout(r, 400 + pass * 400));
                 results[idx] = await fetchOne(results[idx].orderId);
             }
         }
@@ -165,21 +164,21 @@ let FbsService = FbsService_1 = class FbsService {
             }
         };
         const perOrder = orderIds.map((id) => ({ orderId: id, ok: false, items: [] }));
-        const BATCH = 4;
-        for (let i = 0; i < orderIds.length; i += BATCH) {
-            const batch = orderIds.slice(i, i + BATCH);
+        const CONCURRENCY = 4;
+        for (let i = 0; i < orderIds.length; i += CONCURRENCY) {
+            const batch = orderIds.slice(i, i + CONCURRENCY);
             const results = await Promise.all(batch.map(fetchOne));
             results.forEach((r, k) => { perOrder[i + k] = { orderId: batch[k], ...r }; });
-            if (i + BATCH < orderIds.length)
-                await new Promise((r) => setTimeout(r, 200));
+            if (i + CONCURRENCY < orderIds.length)
+                await new Promise((r) => setTimeout(r, 100));
         }
-        for (let pass = 0; pass < 2; pass++) {
+        for (let pass = 0; pass < 3; pass++) {
             const failedIdx = perOrder.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
             if (failedIdx.length === 0)
                 break;
             this.logger.log(`Barcode retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
             for (const idx of failedIdx) {
-                await new Promise((r) => setTimeout(r, 800 + pass * 500));
+                await new Promise((r) => setTimeout(r, 400 + pass * 400));
                 const r = await fetchOne(perOrder[idx].orderId);
                 perOrder[idx] = { orderId: perOrder[idx].orderId, ...r };
             }

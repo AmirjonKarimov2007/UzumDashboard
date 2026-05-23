@@ -188,25 +188,24 @@ export class FbsService {
       }
     };
 
-    // Pass 1: parallel in batches of 4, 200ms gap
+    // Pass 1: parallel batches of 4 with 100ms gap — sweet spot for Uzum's
+    // rate limiter (higher concurrency triggers 429 storms)
     const results: Array<{ orderId: any; ok: boolean; document?: string | null; error?: string }> = [];
-    const BATCH_SIZE = 4;
-    for (let i = 0; i < orderIds.length; i += BATCH_SIZE) {
-      const batch = orderIds.slice(i, i + BATCH_SIZE);
+    const CONCURRENCY = 4;
+    for (let i = 0; i < orderIds.length; i += CONCURRENCY) {
+      const batch = orderIds.slice(i, i + CONCURRENCY);
       const batchResults = await Promise.all(batch.map(fetchOne));
       results.push(...batchResults);
-      if (i + BATCH_SIZE < orderIds.length) {
-        await new Promise((r) => setTimeout(r, 200));
-      }
+      if (i + CONCURRENCY < orderIds.length) await new Promise((r) => setTimeout(r, 100));
     }
 
-    // Retry passes for failed orders — sequential with growing backoff
-    for (let pass = 0; pass < 2; pass++) {
+    // Up to 3 retry passes — sequential with growing backoff
+    for (let pass = 0; pass < 3; pass++) {
       const failedIdx = results.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
       if (failedIdx.length === 0) break;
       this.logger.log(`Label retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
       for (const idx of failedIdx) {
-        await new Promise((r) => setTimeout(r, 800 + pass * 500));
+        await new Promise((r) => setTimeout(r, 400 + pass * 400));
         results[idx] = await fetchOne(results[idx].orderId);
       }
     }
@@ -244,23 +243,23 @@ export class FbsService {
       }
     };
 
-    // Pass 1: parallel batches of 4
+    // Pass 1: parallel batches of 4 with 100ms gap — sweet spot for Uzum
     const perOrder: Array<{ orderId: number | string; ok: boolean; items: Item[] }> = orderIds.map((id) => ({ orderId: id, ok: false, items: [] }));
-    const BATCH = 4;
-    for (let i = 0; i < orderIds.length; i += BATCH) {
-      const batch = orderIds.slice(i, i + BATCH);
+    const CONCURRENCY = 4;
+    for (let i = 0; i < orderIds.length; i += CONCURRENCY) {
+      const batch = orderIds.slice(i, i + CONCURRENCY);
       const results = await Promise.all(batch.map(fetchOne));
       results.forEach((r, k) => { perOrder[i + k] = { orderId: batch[k], ...r }; });
-      if (i + BATCH < orderIds.length) await new Promise((r) => setTimeout(r, 200));
+      if (i + CONCURRENCY < orderIds.length) await new Promise((r) => setTimeout(r, 100));
     }
 
-    // Retry failed orders — sequential with backoff
-    for (let pass = 0; pass < 2; pass++) {
+    // Up to 3 retry passes — sequential with growing backoff
+    for (let pass = 0; pass < 3; pass++) {
       const failedIdx = perOrder.map((r, i) => (r.ok ? -1 : i)).filter((i) => i >= 0);
       if (failedIdx.length === 0) break;
       this.logger.log(`Barcode retry pass ${pass + 1}: ${failedIdx.length} order(s)`);
       for (const idx of failedIdx) {
-        await new Promise((r) => setTimeout(r, 800 + pass * 500));
+        await new Promise((r) => setTimeout(r, 400 + pass * 400));
         const r = await fetchOne(perOrder[idx].orderId);
         perOrder[idx] = { orderId: perOrder[idx].orderId, ...r };
       }
