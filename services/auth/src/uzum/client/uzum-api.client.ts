@@ -749,6 +749,34 @@ export class UzumApiClient {
     return data?.payload?.document || null;
   }
 
+  /** Single-shot label fetch (no 60s retry-after) for batch loops */
+  async getFbsLabelPdfFast(
+    storeId: string,
+    apiKey: string,
+    orderId: number | string,
+    size: 'LARGE' | 'SMALL' = 'LARGE',
+  ): Promise<string | null> {
+    const client = this.buildClient(apiKey);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await client.get(`/v1/fbs/order/${orderId}/labels/print`, {
+          params: { size },
+          timeout: 10_000,
+        });
+        return response.data?.payload?.document || null;
+      } catch (err: any) {
+        const code = err?.response?.status;
+        if (code === 429 && attempt === 1) {
+          await this.sleep(2000);
+          continue;
+        }
+        this.logger.warn(`label fast fetch failed for ${orderId}: ${err?.message}`);
+        return null;
+      }
+    }
+    return null;
+  }
+
   // ─── Validation ───────────────────────────────────────────────────────────
 
   async validateConnection(

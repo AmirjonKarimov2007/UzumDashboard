@@ -170,17 +170,19 @@ export class FbsService {
     size: 'LARGE' | 'SMALL' = 'LARGE',
   ) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    const results = await Promise.all(
-      orderIds.map(async (orderId) => {
-        try {
-          const base64 = await this.uzumClient.getFbsLabelPdf(storeId, apiKey, orderId, size);
-          return { orderId, ok: !!base64, document: base64 };
-        } catch (err: any) {
-          this.logger.warn(`Label fetch failed for order ${orderId}: ${err?.message}`);
-          return { orderId, ok: false, error: err?.message };
-        }
-      }),
-    );
+    // Sequential with small gap to stay under Uzum's rate limit; each request
+    // is single-shot so failures fail fast (no 60s retry-after stalls)
+    const results: Array<{ orderId: any; ok: boolean; document?: string | null; error?: string }> = [];
+    for (const orderId of orderIds) {
+      try {
+        const base64 = await this.uzumClient.getFbsLabelPdfFast(storeId, apiKey, orderId, size);
+        results.push({ orderId, ok: !!base64, document: base64 });
+      } catch (err: any) {
+        this.logger.warn(`Label fetch failed for order ${orderId}: ${err?.message}`);
+        results.push({ orderId, ok: false, error: err?.message });
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
     return {
       total: results.length,
       success: results.filter((r) => r.ok).length,

@@ -387,6 +387,28 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         }));
         return data?.payload?.document || null;
     }
+    async getFbsLabelPdfFast(storeId, apiKey, orderId, size = 'LARGE') {
+        const client = this.buildClient(apiKey);
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                const response = await client.get(`/v1/fbs/order/${orderId}/labels/print`, {
+                    params: { size },
+                    timeout: 10_000,
+                });
+                return response.data?.payload?.document || null;
+            }
+            catch (err) {
+                const code = err?.response?.status;
+                if (code === 429 && attempt === 1) {
+                    await this.sleep(2000);
+                    continue;
+                }
+                this.logger.warn(`label fast fetch failed for ${orderId}: ${err?.message}`);
+                return null;
+            }
+        }
+        return null;
+    }
     async validateConnection(storeId, apiKey) {
         try {
             const shops = await this.getShops(storeId, apiKey);

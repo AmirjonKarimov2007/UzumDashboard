@@ -172,6 +172,7 @@ export declare class UzumApiClient {
     getFbsInvoiceById(storeId: string, apiKey: string, invoiceId: number | string): Promise<any | null>;
     getFbsInvoiceOrders(storeId: string, apiKey: string, invoiceId: number | string): Promise<any[]>;
     getFbsLabelPdf(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
+    getFbsLabelPdfFast(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
     validateConnection(storeId: string, apiKey: string): Promise<{
         valid: boolean;
         shops: UzumShop[];

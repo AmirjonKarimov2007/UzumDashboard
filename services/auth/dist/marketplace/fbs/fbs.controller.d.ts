@@ -42,17 +42,12 @@ export declare class FbsController {
         total: number;
         success: number;
         failed: number;
-        results: ({
-            orderId: string | number;
+        results: {
+            orderId: any;
             ok: boolean;
-            document: string | null;
-            error?: undefined;
-        } | {
-            orderId: string | number;
-            ok: boolean;
-            error: any;
-            document?: undefined;
-        })[];
+            document?: string | null;
+            error?: string;
+        }[];
     }>;
 }
 export {};
