@@ -1,7 +1,23 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
+
+// ─── Process-level safety net ──────────────────────────────────────────────
+// BullMQ's internal RedisConnection reconnect loop emits unhandled promise
+// rejections when Redis is too old (3.0 vs required 5.0). In Node 16+ those
+// rejections eventually kill the process. We log them and keep running so
+// the HTTP server (login + everything else) doesn't die.
+const fatalLogger = new Logger('Process');
+process.on('unhandledRejection', (reason: any) => {
+  const msg = reason?.message ?? String(reason);
+  // Don't spam the log with the same Redis-version rejection from BullMQ.
+  if (typeof msg === 'string' && msg.includes('Redis version')) return;
+  fatalLogger.warn(`Unhandled promise rejection (kept alive): ${msg}`);
+});
+process.on('uncaughtException', (err: Error) => {
+  fatalLogger.error(`Uncaught exception (kept alive): ${err.message}`, err.stack);
+});
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);

@@ -124,7 +124,10 @@ export class UzumApiClient {
   ) {}
 
   private buildClient(apiKey: string): AxiosInstance {
-    // Uzum Seller API expects raw token WITHOUT "Bearer " prefix
+    // Uzum Seller API expects raw token WITHOUT "Bearer " prefix.
+    // CRITICAL: Uzum's query parser only accepts repeat-style arrays
+    // (?shopIds=1&shopIds=2), NOT axios' default bracket style (?shopIds[0]=1).
+    // The bracket style returns 403 silently. Custom paramsSerializer fixes this.
     return axios.create({
       baseURL: this.baseUrl,
       timeout: 30_000,
@@ -132,6 +135,23 @@ export class UzumApiClient {
         Authorization: apiKey,
         Accept: '*/*',
         'User-Agent': 'Uzum-Dashboard/1.0',
+      },
+      paramsSerializer: {
+        serialize: (params) => {
+          const parts: string[] = [];
+          for (const [key, value] of Object.entries(params)) {
+            if (value === undefined || value === null) continue;
+            if (Array.isArray(value)) {
+              for (const v of value) {
+                if (v === undefined || v === null) continue;
+                parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(v))}`);
+              }
+            } else {
+              parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+            }
+          }
+          return parts.join('&');
+        },
       },
     });
   }
@@ -456,8 +476,10 @@ export class UzumApiClient {
     const { page = 0, size = 50, dateFrom, dateTo, statuses, group } = params;
 
     const queryParams: Record<string, unknown> = { shopIds, page, size };
-    if (dateFrom) queryParams.dateFrom = dateFrom;
-    if (dateTo) queryParams.dateTo = dateTo;
+    // Uzum's /v1/finance/* endpoints expect dateFrom/dateTo in SECONDS (despite the
+    // docs typing them as int64). Caller passes ms — convert here.
+    if (dateFrom) queryParams.dateFrom = Math.floor(dateFrom / 1000);
+    if (dateTo) queryParams.dateTo = Math.floor(dateTo / 1000);
     if (statuses?.length) queryParams.statuses = statuses;
     if (group !== undefined) queryParams.group = group;
 
@@ -499,29 +521,66 @@ export class UzumApiClient {
     return allOrders;
   }
 
+  /**
+   * Single direct call to /v1/finance/expenses without date filters.
+   * Sends BOTH `shopId` (deprecated) and `shopIds` (current) — matches the
+   * exact request shape from Uzum's Swagger UI defaults (size=1500).
+   * Returns the raw payments array (no pagination/no classification).
+   */
+  async getRawExpenses(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    page: number = 0,
+    size: number = 1500,
+  ): Promise<{ payments: any[]; totalElements: number }> {
+    const params = { page, size, shopId, shopIds: shopId };
+    const data = await this.executeWithRetry<{ payload: { payments: any[]; totalElements?: number } }>(
+      storeId,
+      apiKey,
+      '/v1/finance/expenses',
+      'GET',
+      (client) => client.get('/v1/finance/expenses', { params, timeout: 60_000 }),
+    );
+    return {
+      payments: data?.payload?.payments || [],
+      totalElements: data?.payload?.totalElements ?? 0,
+    };
+  }
+
   async getExpenses(
     storeId: string,
     apiKey: string,
     shopIds: (string | number)[],
     params: { page?: number; size?: number; dateFrom?: number; dateTo?: number; sources?: string[] } = {},
-  ): Promise<{ payments: any[] }> {
-    const { page = 0, size = 50, dateFrom, dateTo, sources } = params;
+  ): Promise<{ payments: any[]; totalElements: number }> {
+    const { page = 0, size = 100, dateFrom, dateTo, sources } = params;
 
     const queryParams: Record<string, unknown> = { shopIds, page, size };
-    if (dateFrom) queryParams.dateFrom = dateFrom;
-    if (dateTo) queryParams.dateTo = dateTo;
+    // SECONDS, not milliseconds — see getFinanceOrders comment.
+    if (dateFrom) queryParams.dateFrom = Math.floor(dateFrom / 1000);
+    if (dateTo) queryParams.dateTo = Math.floor(dateTo / 1000);
     if (sources?.length) queryParams.sources = sources;
 
-    const data = await this.executeWithRetry<{ payload: { payments: any[] } }>(
+    const data = await this.executeWithRetry<{ payload: { payments: any[]; totalElements?: number } }>(
       storeId,
       apiKey,
       '/v1/finance/expenses',
       'GET',
       (client) => client.get('/v1/finance/expenses', { params: queryParams }),
     );
-    return { payments: data?.payload?.payments || [] };
+    return {
+      payments: data?.payload?.payments || [],
+      totalElements: data?.payload?.totalElements ?? 0,
+    };
   }
 
+  /**
+   * Fetches ALL pages of /v1/finance/expenses. Uses `totalElements` (returned by Uzum)
+   * to know exactly when to stop — robust to partial pages and rate-limit retries.
+   * If a single page fails mid-pagination, returns what was collected so far instead of
+   * losing everything. Page size 100 = matches Swagger UI default.
+   */
   async getAllExpenses(
     storeId: string,
     apiKey: string,
@@ -529,21 +588,36 @@ export class UzumApiClient {
     dateFrom?: number,
     dateTo?: number,
   ): Promise<any[]> {
-    const pageSize = 50;
+    const pageSize = 100;
     const all: any[] = [];
     let page = 0;
+    let totalElements = Infinity;
 
-    while (true) {
-      await this.sleep(150);
-      const { payments } = await this.getExpenses(storeId, apiKey, shopIds, {
-        page, size: pageSize, dateFrom, dateTo,
-      });
-      if (payments.length === 0) break;
-      all.push(...payments);
-      if (payments.length < pageSize) break;
-      page++;
+    while (all.length < totalElements) {
+      try {
+        // Small delay between pages — Uzum's rate limit is generous enough that 100ms is safe.
+        if (page > 0) await this.sleep(100);
+        const { payments, totalElements: t } = await this.getExpenses(storeId, apiKey, shopIds, {
+          page, size: pageSize, dateFrom, dateTo,
+        });
+        if (t > 0) totalElements = t;
+        if (payments.length === 0) break;
+        all.push(...payments);
+        // Defensive: also break on a short page (last partial page) even if totalElements
+        // wasn't returned. Without totalElements we have no other stop signal.
+        if (payments.length < pageSize && totalElements === Infinity) break;
+        page++;
+      } catch (err: any) {
+        this.logger.warn(
+          `getAllExpenses page ${page} failed (${err?.message || err}); returning ${all.length} items collected so far`,
+        );
+        break;
+      }
     }
 
+    this.logger.log(
+      `getAllExpenses: fetched ${all.length}/${totalElements === Infinity ? '?' : totalElements} items across ${page + 1} pages`,
+    );
     return all;
   }
 
@@ -609,6 +683,8 @@ export class UzumApiClient {
     apiKey: string,
     shopId: string | number,
     statuses: string[] = ['CREATED', 'PACKING', 'RETURNED'],
+    dateFrom?: number,
+    dateTo?: number,
   ): Promise<any[]> {
     const all: any[] = [];
     for (const status of statuses) {
@@ -624,6 +700,7 @@ export class UzumApiClient {
             status,
             page,
             pageSize,
+            { dateFrom, dateTo },
           );
           if (orders.length === 0) break;
           all.push(...orders);

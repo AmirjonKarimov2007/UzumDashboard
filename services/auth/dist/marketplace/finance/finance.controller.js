@@ -15,12 +15,31 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.FinanceController = void 0;
 const common_1 = require("@nestjs/common");
 const jwt_auth_guard_1 = require("../../common/guards/jwt-auth.guard");
+const current_user_decorator_1 = require("../../common/decorators/current-user.decorator");
 const analytics_service_1 = require("../analytics/analytics.service");
+const finance_sync_service_1 = require("./finance-sync.service");
 const prisma_service_1 = require("../../common/database/prisma.service");
 let FinanceController = class FinanceController {
-    constructor(analyticsService, prisma) {
+    constructor(analyticsService, financeSyncService, prisma) {
         this.analyticsService = analyticsService;
+        this.financeSyncService = financeSyncService;
         this.prisma = prisma;
+    }
+    getProcessingAndWithdraw(userId, storeId, force) {
+        return this.financeSyncService.getProcessingAndWithdraw(userId, storeId, {
+            force: force === '1' || force === 'true',
+        });
+    }
+    getLogisticsAndFines(userId, storeId, force) {
+        return this.financeSyncService.getLogisticsAndFines(userId, storeId, {
+            force: force === '1' || force === 'true',
+        });
+    }
+    getReconciliation(userId, storeId, dateFrom, dateTo) {
+        return this.financeSyncService.getReconciliation(userId, storeId, {
+            dateFrom: dateFrom ? Number(dateFrom) : undefined,
+            dateTo: dateTo ? Number(dateTo) : undefined,
+        });
     }
     getFinanceSummary(storeId, timeRange = 'month') {
         return this.analyticsService.getFinanceSummary(storeId, timeRange);
@@ -160,6 +179,34 @@ let FinanceController = class FinanceController {
 };
 exports.FinanceController = FinanceController;
 __decorate([
+    (0, common_1.Get)('processing-withdraw'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('force')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FinanceController.prototype, "getProcessingAndWithdraw", null);
+__decorate([
+    (0, common_1.Get)('logistics-fines'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('force')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FinanceController.prototype, "getLogisticsAndFines", null);
+__decorate([
+    (0, common_1.Get)('reconciliation'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('dateFrom')),
+    __param(3, (0, common_1.Query)('dateTo')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], FinanceController.prototype, "getReconciliation", null);
+__decorate([
     (0, common_1.Get)('summary'),
     __param(0, (0, common_1.Param)('storeId')),
     __param(1, (0, common_1.Query)('timeRange')),
@@ -214,6 +261,7 @@ exports.FinanceController = FinanceController = __decorate([
     (0, common_1.Controller)('marketplace/stores/:storeId/finance'),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
     __metadata("design:paramtypes", [analytics_service_1.AnalyticsService,
+        finance_sync_service_1.FinanceSyncService,
         prisma_service_1.PrismaService])
 ], FinanceController);
 //# sourceMappingURL=finance.controller.js.map

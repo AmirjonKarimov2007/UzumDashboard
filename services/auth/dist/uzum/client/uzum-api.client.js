@@ -33,6 +33,26 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                 Accept: '*/*',
                 'User-Agent': 'Uzum-Dashboard/1.0',
             },
+            paramsSerializer: {
+                serialize: (params) => {
+                    const parts = [];
+                    for (const [key, value] of Object.entries(params)) {
+                        if (value === undefined || value === null)
+                            continue;
+                        if (Array.isArray(value)) {
+                            for (const v of value) {
+                                if (v === undefined || v === null)
+                                    continue;
+                                parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(v))}`);
+                            }
+                        }
+                        else {
+                            parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+                        }
+                    }
+                    return parts.join('&');
+                },
+            },
         });
     }
     extractRateLimitInfo(headers) {
@@ -213,9 +233,9 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         const { page = 0, size = 50, dateFrom, dateTo, statuses, group } = params;
         const queryParams = { shopIds, page, size };
         if (dateFrom)
-            queryParams.dateFrom = dateFrom;
+            queryParams.dateFrom = Math.floor(dateFrom / 1000);
         if (dateTo)
-            queryParams.dateTo = dateTo;
+            queryParams.dateTo = Math.floor(dateTo / 1000);
         if (statuses?.length)
             queryParams.statuses = statuses;
         if (group !== undefined)
@@ -244,34 +264,56 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         }
         return allOrders;
     }
+    async getRawExpenses(storeId, apiKey, shopId, page = 0, size = 1500) {
+        const params = { page, size, shopId, shopIds: shopId };
+        const data = await this.executeWithRetry(storeId, apiKey, '/v1/finance/expenses', 'GET', (client) => client.get('/v1/finance/expenses', { params, timeout: 60_000 }));
+        return {
+            payments: data?.payload?.payments || [],
+            totalElements: data?.payload?.totalElements ?? 0,
+        };
+    }
     async getExpenses(storeId, apiKey, shopIds, params = {}) {
-        const { page = 0, size = 50, dateFrom, dateTo, sources } = params;
+        const { page = 0, size = 100, dateFrom, dateTo, sources } = params;
         const queryParams = { shopIds, page, size };
         if (dateFrom)
-            queryParams.dateFrom = dateFrom;
+            queryParams.dateFrom = Math.floor(dateFrom / 1000);
         if (dateTo)
-            queryParams.dateTo = dateTo;
+            queryParams.dateTo = Math.floor(dateTo / 1000);
         if (sources?.length)
             queryParams.sources = sources;
         const data = await this.executeWithRetry(storeId, apiKey, '/v1/finance/expenses', 'GET', (client) => client.get('/v1/finance/expenses', { params: queryParams }));
-        return { payments: data?.payload?.payments || [] };
+        return {
+            payments: data?.payload?.payments || [],
+            totalElements: data?.payload?.totalElements ?? 0,
+        };
     }
     async getAllExpenses(storeId, apiKey, shopIds, dateFrom, dateTo) {
-        const pageSize = 50;
+        const pageSize = 100;
         const all = [];
         let page = 0;
-        while (true) {
-            await this.sleep(150);
-            const { payments } = await this.getExpenses(storeId, apiKey, shopIds, {
-                page, size: pageSize, dateFrom, dateTo,
-            });
-            if (payments.length === 0)
+        let totalElements = Infinity;
+        while (all.length < totalElements) {
+            try {
+                if (page > 0)
+                    await this.sleep(100);
+                const { payments, totalElements: t } = await this.getExpenses(storeId, apiKey, shopIds, {
+                    page, size: pageSize, dateFrom, dateTo,
+                });
+                if (t > 0)
+                    totalElements = t;
+                if (payments.length === 0)
+                    break;
+                all.push(...payments);
+                if (payments.length < pageSize && totalElements === Infinity)
+                    break;
+                page++;
+            }
+            catch (err) {
+                this.logger.warn(`getAllExpenses page ${page} failed (${err?.message || err}); returning ${all.length} items collected so far`);
                 break;
-            all.push(...payments);
-            if (payments.length < pageSize)
-                break;
-            page++;
+            }
         }
+        this.logger.log(`getAllExpenses: fetched ${all.length}/${totalElements === Infinity ? '?' : totalElements} items across ${page + 1} pages`);
         return all;
     }
     async getStocks(storeId, apiKey, _shopId, _page = 0, _size = 50) {
@@ -296,7 +338,7 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             totalAmount: data?.payload?.totalAmount,
         };
     }
-    async getAllFbsOrders(storeId, apiKey, shopId, statuses = ['CREATED', 'PACKING', 'RETURNED']) {
+    async getAllFbsOrders(storeId, apiKey, shopId, statuses = ['CREATED', 'PACKING', 'RETURNED'], dateFrom, dateTo) {
         const all = [];
         for (const status of statuses) {
             let page = 0;
@@ -304,7 +346,7 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             while (true) {
                 try {
                     await this.sleep(150);
-                    const { orders } = await this.getFbsOrders(storeId, apiKey, shopId, status, page, pageSize);
+                    const { orders } = await this.getFbsOrders(storeId, apiKey, shopId, status, page, pageSize, { dateFrom, dateTo });
                     if (orders.length === 0)
                         break;
                     all.push(...orders);

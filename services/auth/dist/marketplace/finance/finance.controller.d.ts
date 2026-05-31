@@ -1,9 +1,14 @@
 import { AnalyticsService } from '../analytics/analytics.service';
+import { FinanceSyncService } from './finance-sync.service';
 import { PrismaService } from '../../common/database/prisma.service';
 export declare class FinanceController {
     private readonly analyticsService;
+    private readonly financeSyncService;
     private readonly prisma;
-    constructor(analyticsService: AnalyticsService, prisma: PrismaService);
+    constructor(analyticsService: AnalyticsService, financeSyncService: FinanceSyncService, prisma: PrismaService);
+    getProcessingAndWithdraw(userId: string, storeId: string, force?: string): Promise<any>;
+    getLogisticsAndFines(userId: string, storeId: string, force?: string): Promise<any>;
+    getReconciliation(userId: string, storeId: string, dateFrom?: string, dateTo?: string): Promise<any>;
     getFinanceSummary(storeId: string, timeRange?: string): Promise<{
         revenue: number;
         commission: number;
@@ -24,12 +29,12 @@ export declare class FinanceController {
     })[]>;
     getTransactions(storeId: string, page: number, size: number, dateFrom?: string, dateTo?: string): Promise<{
         data: {
-            id: string;
-            status: import(".prisma/client").$Enums.OrderStatus;
             total: import("@prisma/client/runtime/library").Decimal;
-            profit: import("@prisma/client/runtime/library").Decimal;
-            uzumOrderId: string;
             commission: import("@prisma/client/runtime/library").Decimal;
+            profit: import("@prisma/client/runtime/library").Decimal;
+            status: import(".prisma/client").$Enums.OrderStatus;
+            id: string;
+            uzumOrderId: string;
             orderedAt: Date | null;
             items: {
                 name: string;

@@ -142,6 +142,10 @@ export declare class UzumApiClient {
         total: number;
     }>;
     getAllFinanceOrders(storeId: string, apiKey: string, shopIds: (string | number)[], dateFrom?: number, dateTo?: number): Promise<any[]>;
+    getRawExpenses(storeId: string, apiKey: string, shopId: string | number, page?: number, size?: number): Promise<{
+        payments: any[];
+        totalElements: number;
+    }>;
     getExpenses(storeId: string, apiKey: string, shopIds: (string | number)[], params?: {
         page?: number;
         size?: number;
@@ -150,6 +154,7 @@ export declare class UzumApiClient {
         sources?: string[];
     }): Promise<{
         payments: any[];
+        totalElements: number;
     }>;
     getAllExpenses(storeId: string, apiKey: string, shopIds: (string | number)[], dateFrom?: number, dateTo?: number): Promise<any[]>;
     getStocks(storeId: string, apiKey: string, _shopId?: string, _page?: number, _size?: number): Promise<{
@@ -164,7 +169,7 @@ export declare class UzumApiClient {
         orders: any[];
         totalAmount?: number;
     }>;
-    getAllFbsOrders(storeId: string, apiKey: string, shopId: string | number, statuses?: string[]): Promise<any[]>;
+    getAllFbsOrders(storeId: string, apiKey: string, shopId: string | number, statuses?: string[], dateFrom?: number, dateTo?: number): Promise<any[]>;
     getFbsOrderCount(storeId: string, apiKey: string, shopId: string | number, status: string, dateFrom?: number, dateTo?: number): Promise<number>;
     confirmFbsOrder(storeId: string, apiKey: string, orderId: number | string): Promise<{
         ok: boolean;

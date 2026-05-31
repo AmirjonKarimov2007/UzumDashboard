@@ -69,7 +69,9 @@
       "Bash(size=5 2>&1)",
       "Bash(curl *)",
       "Bash(taskkill /F /PID 7424)",
-      "Bash(cmd *)"
+      "Bash(cmd *)",
+      "Bash(pkill -f \"nest start\")",
+      "Bash(taskkill /F /PID 20576)"
     ]
   }
 }

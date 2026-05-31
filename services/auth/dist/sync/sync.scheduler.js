@@ -15,54 +15,71 @@ const common_1 = require("@nestjs/common");
 const schedule_1 = require("@nestjs/schedule");
 const sync_service_1 = require("./sync.service");
 const stores_service_1 = require("../marketplace/stores/stores.service");
+let queueDisabled = false;
+let disableReason = '';
 let SyncScheduler = SyncScheduler_1 = class SyncScheduler {
     constructor(syncService, storesService) {
         this.syncService = syncService;
         this.storesService = storesService;
         this.logger = new common_1.Logger(SyncScheduler_1.name);
     }
+    async safeRun(label, fn) {
+        if (queueDisabled)
+            return;
+        try {
+            await fn();
+        }
+        catch (e) {
+            const msg = e.message || String(e);
+            if (msg.includes('Redis version') || msg.includes('ECONNREFUSED') || msg.includes('NOAUTH')) {
+                queueDisabled = true;
+                disableReason = msg;
+                this.logger.error(`Sync queue disabled — Redis unhealthy (${msg}). ` +
+                    `Auto-sync turned off until restart. Sales/orders endpoints remain available.`);
+                return;
+            }
+            this.logger.error(`${label}: ${msg}`);
+        }
+    }
     async syncOrdersAll() {
+        if (queueDisabled)
+            return;
         const stores = await this.storesService.getConnectedStores();
-        for (const { storeId, uzumShopId } of stores) {
+        for (const { storeId } of stores) {
             const conn = await this.storesService.getConnectionInfo(storeId);
             if (!conn?.isAutoSync)
                 continue;
-            try {
-                await this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_ORDERS);
-            }
-            catch (e) {
-                this.logger.error(`Failed to queue order sync for store ${storeId}: ${e.message}`);
-            }
+            await this.safeRun(`Failed to queue order sync for store ${storeId}`, () => this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_ORDERS));
         }
     }
     async syncProductsAll() {
+        if (queueDisabled)
+            return;
         const stores = await this.storesService.getConnectedStores();
         for (const { storeId } of stores) {
             const conn = await this.storesService.getConnectionInfo(storeId);
             if (!conn?.isAutoSync)
                 continue;
-            try {
+            await this.safeRun(`Failed to queue product sync for store ${storeId}`, async () => {
                 await this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_PRODUCTS);
-                await this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_INVENTORY);
-            }
-            catch (e) {
-                this.logger.error(`Failed to queue product sync for store ${storeId}: ${e.message}`);
-            }
+                if (!queueDisabled)
+                    await this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_INVENTORY);
+            });
         }
     }
     async syncAnalyticsAll() {
+        if (queueDisabled)
+            return;
         const stores = await this.storesService.getConnectedStores();
         for (const { storeId } of stores) {
             const conn = await this.storesService.getConnectionInfo(storeId);
             if (!conn?.isAutoSync)
                 continue;
-            try {
-                await this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_ANALYTICS);
-            }
-            catch (e) {
-                this.logger.error(`Failed to queue analytics sync for store ${storeId}: ${e.message}`);
-            }
+            await this.safeRun(`Failed to queue analytics sync for store ${storeId}`, () => this.syncService.triggerPartialSync(storeId, sync_service_1.SyncJobType.SYNC_ANALYTICS));
         }
+    }
+    static isQueueDisabled() {
+        return { disabled: queueDisabled, reason: disableReason };
     }
 };
 exports.SyncScheduler = SyncScheduler;

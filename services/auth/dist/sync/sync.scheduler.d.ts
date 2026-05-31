@@ -5,7 +5,12 @@ export declare class SyncScheduler {
     private readonly storesService;
     private readonly logger;
     constructor(syncService: SyncService, storesService: StoresService);
+    private safeRun;
     syncOrdersAll(): Promise<void>;
     syncProductsAll(): Promise<void>;
     syncAnalyticsAll(): Promise<void>;
+    static isQueueDisabled(): {
+        disabled: boolean;
+        reason: string;
+    };
 }

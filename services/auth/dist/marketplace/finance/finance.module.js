@@ -13,12 +13,13 @@ const finance_controller_1 = require("./finance.controller");
 const uzum_module_1 = require("../../uzum/uzum.module");
 const database_module_1 = require("../../common/database/database.module");
 const analytics_module_1 = require("../analytics/analytics.module");
+const stores_module_1 = require("../stores/stores.module");
 let FinanceModule = class FinanceModule {
 };
 exports.FinanceModule = FinanceModule;
 exports.FinanceModule = FinanceModule = __decorate([
     (0, common_1.Module)({
-        imports: [database_module_1.DatabaseModule, uzum_module_1.UzumModule, analytics_module_1.AnalyticsModule],
+        imports: [database_module_1.DatabaseModule, uzum_module_1.UzumModule, analytics_module_1.AnalyticsModule, stores_module_1.StoresModule],
         controllers: [finance_controller_1.FinanceController],
         providers: [finance_sync_service_1.FinanceSyncService],
         exports: [finance_sync_service_1.FinanceSyncService],

@@ -4,6 +4,16 @@ const core_1 = require("@nestjs/core");
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const app_module_1 = require("./app.module");
+const fatalLogger = new common_1.Logger('Process');
+process.on('unhandledRejection', (reason) => {
+    const msg = reason?.message ?? String(reason);
+    if (typeof msg === 'string' && msg.includes('Redis version'))
+        return;
+    fatalLogger.warn(`Unhandled promise rejection (kept alive): ${msg}`);
+});
+process.on('uncaughtException', (err) => {
+    fatalLogger.error(`Uncaught exception (kept alive): ${err.message}`, err.stack);
+});
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
     const configService = app.get(config_1.ConfigService);

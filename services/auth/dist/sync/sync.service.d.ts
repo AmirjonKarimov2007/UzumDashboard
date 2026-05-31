@@ -43,11 +43,11 @@ export declare class SyncService {
         queuedJobs: number;
         activeJobs: number;
         recentLogs: {
+            status: import(".prisma/client").$Enums.SyncStatus;
             error: string | null;
             id: string;
-            metadata: import("@prisma/client/runtime/library").JsonValue | null;
-            status: import(".prisma/client").$Enums.SyncStatus;
             storeId: string;
+            metadata: import("@prisma/client/runtime/library").JsonValue | null;
             syncType: import(".prisma/client").$Enums.SyncType;
             startedAt: Date;
             completedAt: Date | null;

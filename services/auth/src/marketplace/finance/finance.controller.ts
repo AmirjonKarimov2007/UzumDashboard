@@ -1,6 +1,8 @@
 import { Controller, Get, Param, Query, UseGuards, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AnalyticsService } from '../analytics/analytics.service';
+import { FinanceSyncService } from './finance-sync.service';
 import { PrismaService } from '../../common/database/prisma.service';
 
 @Controller('marketplace/stores/:storeId/finance')
@@ -8,8 +10,57 @@ import { PrismaService } from '../../common/database/prisma.service';
 export class FinanceController {
   constructor(
     private readonly analyticsService: AnalyticsService,
+    private readonly financeSyncService: FinanceSyncService,
     private readonly prisma: PrismaService,
   ) {}
+
+  /**
+   * Full reconciliation: sales (transfers) − withdrawals − other deductions = balance.
+   * Pulls live from Uzum /v1/finance/orders + /v1/finance/expenses.
+   * Optional dateFrom/dateTo as unix milliseconds; defaults to ~5 years back.
+   */
+  /**
+   * Sums of sellerProfit+logisticDeliveryFee for orders in PROCESSING and TO_WITHDRAW
+   * statuses ("Jarayonda" / "To'langan"). Size auto-computed from FBS active counts × 1.5.
+   */
+  @Get('processing-withdraw')
+  getProcessingAndWithdraw(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('force') force?: string,
+  ) {
+    return this.financeSyncService.getProcessingAndWithdraw(userId, storeId, {
+      force: force === '1' || force === 'true',
+    });
+  }
+
+  /**
+   * Lightweight summary: just sum of LOGISTIKA + sum of JARIMALAR + their combined total.
+   * Hits /v1/finance/expenses once (size=1500, no date filter). Cached 5 min.
+   */
+  @Get('logistics-fines')
+  getLogisticsAndFines(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('force') force?: string,
+  ) {
+    return this.financeSyncService.getLogisticsAndFines(userId, storeId, {
+      force: force === '1' || force === 'true',
+    });
+  }
+
+  @Get('reconciliation')
+  getReconciliation(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.financeSyncService.getReconciliation(userId, storeId, {
+      dateFrom: dateFrom ? Number(dateFrom) : undefined,
+      dateTo: dateTo ? Number(dateTo) : undefined,
+    });
+  }
 
   @Get('summary')
   getFinanceSummary(

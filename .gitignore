@@ -1,0 +1,6 @@
+
+# Finance disk cache
+.cache/
+
+# PM2
+.pm2/
