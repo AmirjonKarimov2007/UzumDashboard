@@ -193,7 +193,12 @@ export class FinanceSyncService {
     const refunds: Item[] = []; // type === "INCOME" — money returned to seller
 
     for (const e of payments) {
-      const amount = Math.abs(Number(e.paymentPrice ?? e.amount ?? 0));
+      // paymentPrice is PER UNIT; `amount` is the quantity. Real charge = price × qty.
+      // (e.g. logistics 8000 × 4 units = 32000 so'm). Older code summed only the unit
+      // price which under-counted multi-unit logistics lines.
+      const unitPrice = Math.abs(Number(e.paymentPrice ?? 0));
+      const qty = Number(e.amount ?? 1) || 1;
+      const amount = unitPrice * qty;
       if (!amount) continue;
       const source = String(e.source || '').trim();
       const description = String(e.name || e.description || e.comment || source);
@@ -653,8 +658,11 @@ export class FinanceSyncService {
 
     for (const e of expenses) {
       // Verified field mapping from live API:
-      // paymentPrice = money (in so'm); type = "OUTCOME"|"INCOME"; source = "Logistika"/"Komissiya"/...
-      const amount = Math.abs(Number(e.paymentPrice ?? e.amount ?? 0));
+      // paymentPrice = PER-UNIT money (so'm); e.amount = quantity → real charge = price × qty.
+      // Local-DB fallback rows have no paymentPrice and store the money directly in `amount`.
+      const amount = e.paymentPrice != null
+        ? Math.abs(Number(e.paymentPrice)) * (Number(e.amount ?? 1) || 1)
+        : Math.abs(Number(e.amount ?? 0));
       const source = String(e.source || 'UNKNOWN');
       const description = String(e.name || e.description || e.comment || source);
       const status = String(e.status || 'UNKNOWN').toUpperCase();

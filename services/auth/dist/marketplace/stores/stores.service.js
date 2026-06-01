@@ -78,9 +78,17 @@ let StoresService = StoresService_1 = class StoresService {
         return store;
     }
     async connectStore(userId, storeId, dto) {
-        const store = await this.prisma.store.findFirst({ where: { id: storeId, userId } });
-        if (!store)
-            throw new common_1.NotFoundException('Store not found');
+        let store = await this.prisma.store.findFirst({ where: { id: storeId, userId } });
+        if (!store) {
+            store = await this.prisma.store.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' } });
+            if (!store) {
+                store = await this.prisma.store.create({
+                    data: { userId, name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' },
+                });
+                this.logger.log(`connectStore: auto-created store ${store.id} for user ${userId}`);
+            }
+            storeId = store.id;
+        }
         this.logger.log(`Validating Uzum credentials for store ${storeId}`);
         let shopName = `Uzum Shop ${dto.uzumShopId}`;
         let validationWarning = null;
@@ -101,10 +109,16 @@ let StoresService = StoresService_1 = class StoresService {
             this.logger.warn(`Uzum validation failed for store ${storeId}: ${validationWarning}`);
         }
         const existing = await this.prisma.storeConnection.findFirst({
-            where: { uzumShopId: dto.uzumShopId },
+            where: { uzumShopId: dto.uzumShopId, isConnected: true },
+            include: { store: { include: { user: { select: { phone: true } } } } },
         });
         if (existing && existing.storeId !== storeId) {
-            throw new common_1.ConflictException('Bu Uzum do\'koni boshqa hisobga bog\'langan');
+            const isDev = process.env.NODE_ENV !== 'production';
+            const ownerPhone = existing.store?.user?.phone;
+            const msg = isDev && ownerPhone
+                ? `Bu Uzum do'koni boshqa hisobga bog'langan: ${ownerPhone}`
+                : 'Bu Uzum do\'koni boshqa hisobga bog\'langan';
+            throw new common_1.ConflictException(msg);
         }
         const { encrypted, iv, tag } = (0, crypto_util_1.encrypt)(dto.apiKey, this.encryptionSecret);
         await this.prisma.storeConnection.upsert({
@@ -146,21 +160,19 @@ let StoresService = StoresService_1 = class StoresService {
         if (validationWarning) {
             return {
                 connected: false,
+                storeId,
                 shopName,
                 warning: validationWarning,
                 message: 'Sozlamalar saqlandi, lekin Uzum API bilan aloqa o\'rnatilmadi. Uzum Seller paneldan to\'g\'ri API kalitini oling.',
             };
         }
-        return { connected: true, shopName };
+        return { connected: true, storeId, shopName };
     }
     async disconnectStore(userId, storeId) {
         const store = await this.prisma.store.findFirst({ where: { id: storeId, userId } });
         if (!store)
             throw new common_1.NotFoundException('Store not found');
-        await this.prisma.storeConnection.updateMany({
-            where: { storeId },
-            data: { isConnected: false },
-        });
+        await this.prisma.storeConnection.deleteMany({ where: { storeId } });
         await this.prisma.auditLog.create({
             data: {
                 action: 'STORE_DISCONNECTED',

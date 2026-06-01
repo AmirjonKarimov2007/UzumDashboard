@@ -78,8 +78,21 @@ export class StoresService {
   }
 
   async connectStore(userId: string, storeId: string, dto: ConnectStoreDto) {
-    const store = await this.prisma.store.findFirst({ where: { id: storeId, userId } });
-    if (!store) throw new NotFoundException('Store not found');
+    // Self-healing lookup: the frontend may send a stale `storeId` (e.g. left over
+    // in localStorage from a previous account) or the user may have registered
+    // before automatic store creation existed. Rather than failing with
+    // "Store not found", fall back to the user's existing store — or create one.
+    let store = await this.prisma.store.findFirst({ where: { id: storeId, userId } });
+    if (!store) {
+      store = await this.prisma.store.findFirst({ where: { userId }, orderBy: { createdAt: 'asc' } });
+      if (!store) {
+        store = await this.prisma.store.create({
+          data: { userId, name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' },
+        });
+        this.logger.log(`connectStore: auto-created store ${store.id} for user ${userId}`);
+      }
+      storeId = store.id; // use the real store id for the rest of the flow
+    }
 
     // Try to validate credentials against Uzum API (non-blocking)
     this.logger.log(`Validating Uzum credentials for store ${storeId}`);
@@ -105,12 +118,22 @@ export class StoresService {
       this.logger.warn(`Uzum validation failed for store ${storeId}: ${validationWarning}`);
     }
 
-    // Check for conflicts with other stores
+    // Check for conflicts — only an ACTIVELY connected shop blocks. A disconnected
+    // row (isConnected=false) must never block, otherwise a shop stays "occupied"
+    // forever after someone disconnects.
     const existing = await this.prisma.storeConnection.findFirst({
-      where: { uzumShopId: dto.uzumShopId },
+      where: { uzumShopId: dto.uzumShopId, isConnected: true },
+      include: { store: { include: { user: { select: { phone: true } } } } },
     });
     if (existing && existing.storeId !== storeId) {
-      throw new ConflictException('Bu Uzum do\'koni boshqa hisobga bog\'langan');
+      // In dev mode, reveal which phone owns this shop so testing is easier.
+      // In production we keep the message generic (don't leak other users' phones).
+      const isDev = process.env.NODE_ENV !== 'production';
+      const ownerPhone = existing.store?.user?.phone;
+      const msg = isDev && ownerPhone
+        ? `Bu Uzum do'koni boshqa hisobga bog'langan: ${ownerPhone}`
+        : 'Bu Uzum do\'koni boshqa hisobga bog\'langan';
+      throw new ConflictException(msg);
     }
 
     // Encrypt API key
@@ -161,23 +184,25 @@ export class StoresService {
     if (validationWarning) {
       return {
         connected: false,
+        storeId,
         shopName,
         warning: validationWarning,
         message: 'Sozlamalar saqlandi, lekin Uzum API bilan aloqa o\'rnatilmadi. Uzum Seller paneldan to\'g\'ri API kalitini oling.',
       };
     }
 
-    return { connected: true, shopName };
+    return { connected: true, storeId, shopName };
   }
 
   async disconnectStore(userId: string, storeId: string) {
     const store = await this.prisma.store.findFirst({ where: { id: storeId, userId } });
     if (!store) throw new NotFoundException('Store not found');
 
-    await this.prisma.storeConnection.updateMany({
-      where: { storeId },
-      data: { isConnected: false },
-    });
+    // Fully remove the connection row — this frees the uzumShopId + wipes the
+    // encrypted API key so another user can connect that same Uzum shop later.
+    // (Just flipping isConnected=false would keep the shop "occupied" and block
+    // the conflict check in connectStore.)
+    await this.prisma.storeConnection.deleteMany({ where: { storeId } });
 
     await this.prisma.auditLog.create({
       data: {

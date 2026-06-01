@@ -19,15 +19,15 @@ export declare class StoresController {
             orders: number;
         };
     } & {
-        status: import(".prisma/client").$Enums.StoreStatus;
         id: string;
+        createdAt: Date;
         userId: string;
         name: string;
+        updatedAt: Date;
         domain: string | null;
         logo: string | null;
+        status: import(".prisma/client").$Enums.StoreStatus;
         plan: import(".prisma/client").$Enums.Plan;
-        createdAt: Date;
-        updatedAt: Date;
     })[]>;
     getStore(userId: string, storeId: string): Promise<{
         connection: {
@@ -41,23 +41,25 @@ export declare class StoresController {
             rateLimitDayRemaining: number | null;
         } | null;
     } & {
-        status: import(".prisma/client").$Enums.StoreStatus;
         id: string;
+        createdAt: Date;
         userId: string;
         name: string;
+        updatedAt: Date;
         domain: string | null;
         logo: string | null;
+        status: import(".prisma/client").$Enums.StoreStatus;
         plan: import(".prisma/client").$Enums.Plan;
-        createdAt: Date;
-        updatedAt: Date;
     }>;
     connectStore(userId: string, storeId: string, dto: ConnectStoreDto): Promise<{
         connected: boolean;
+        storeId: string;
         shopName: string;
         warning: string;
         message: string;
     } | {
         connected: boolean;
+        storeId: string;
         shopName: string;
         warning?: undefined;
         message?: undefined;

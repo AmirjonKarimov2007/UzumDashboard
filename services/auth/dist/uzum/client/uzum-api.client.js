@@ -14,7 +14,23 @@ exports.UzumApiClient = void 0;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const axios_1 = require("axios");
+const http_1 = require("http");
+const https_1 = require("https");
 const prisma_service_1 = require("../../common/database/prisma.service");
+const keepAliveHttps = new https_1.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 15_000,
+    maxSockets: 64,
+    maxFreeSockets: 16,
+    scheduling: 'lifo',
+});
+const keepAliveHttp = new http_1.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 15_000,
+    maxSockets: 64,
+    maxFreeSockets: 16,
+    scheduling: 'lifo',
+});
 let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
     constructor(config, prisma) {
         this.config = config;
@@ -28,10 +44,13 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         return axios_1.default.create({
             baseURL: this.baseUrl,
             timeout: 30_000,
+            httpAgent: keepAliveHttp,
+            httpsAgent: keepAliveHttps,
             headers: {
                 Authorization: apiKey,
                 Accept: '*/*',
                 'User-Agent': 'Uzum-Dashboard/1.0',
+                Connection: 'keep-alive',
             },
             paramsSerializer: {
                 serialize: (params) => {
@@ -97,7 +116,7 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                 const response = await fn(client);
                 const responseTimeMs = Date.now() - start;
                 const rateInfo = this.extractRateLimitInfo(response.headers);
-                await Promise.all([
+                void Promise.allSettled([
                     this.logApiCall(storeId, endpoint, method, response.status, responseTimeMs, rateInfo),
                     this.persistRateLimitInfo(storeId, rateInfo),
                 ]);
@@ -110,7 +129,7 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                 const axiosErr = err;
                 const responseTimeMs = Date.now() - start;
                 const statusCode = axiosErr.response?.status || 0;
-                await this.logApiCall(storeId, endpoint, method, statusCode, responseTimeMs, undefined, axiosErr.message);
+                void this.logApiCall(storeId, endpoint, method, statusCode, responseTimeMs, undefined, axiosErr.message).catch(() => { });
                 if (statusCode === 401) {
                     throw new common_1.UnauthorizedException('Uzum API kaliti noto\'g\'ri — Uzum Seller panel → API sozlamalaridan yangi kalit oling');
                 }

@@ -25,15 +25,15 @@ export declare class StoresService {
             orders: number;
         };
     } & {
-        status: import(".prisma/client").$Enums.StoreStatus;
         id: string;
+        createdAt: Date;
         userId: string;
         name: string;
+        updatedAt: Date;
         domain: string | null;
         logo: string | null;
+        status: import(".prisma/client").$Enums.StoreStatus;
         plan: import(".prisma/client").$Enums.Plan;
-        createdAt: Date;
-        updatedAt: Date;
     })[]>;
     getStore(userId: string, storeId: string): Promise<{
         connection: {
@@ -47,23 +47,25 @@ export declare class StoresService {
             rateLimitDayRemaining: number | null;
         } | null;
     } & {
-        status: import(".prisma/client").$Enums.StoreStatus;
         id: string;
+        createdAt: Date;
         userId: string;
         name: string;
+        updatedAt: Date;
         domain: string | null;
         logo: string | null;
+        status: import(".prisma/client").$Enums.StoreStatus;
         plan: import(".prisma/client").$Enums.Plan;
-        createdAt: Date;
-        updatedAt: Date;
     }>;
     connectStore(userId: string, storeId: string, dto: ConnectStoreDto): Promise<{
         connected: boolean;
+        storeId: string;
         shopName: string;
         warning: string;
         message: string;
     } | {
         connected: boolean;
+        storeId: string;
         shopName: string;
         warning?: undefined;
         message?: undefined;
@@ -85,11 +87,10 @@ export declare class StoresService {
         apiKey: string;
     }>;
     getConnectionInfo(storeId: string): Promise<{
-        uzumShopId: string;
         id: string;
         createdAt: Date;
         updatedAt: Date;
-        storeId: string;
+        uzumShopId: string;
         apiKeyEncrypted: string;
         apiKeyIv: string;
         apiKeyTag: string;
@@ -101,6 +102,7 @@ export declare class StoresService {
         rateLimitRemaining: number | null;
         rateLimitDayRemaining: number | null;
         rateLimitResetAt: Date | null;
+        storeId: string;
     } | null>;
     markSyncStarted(storeId: string): Promise<void>;
     markSyncCompleted(storeId: string): Promise<void>;

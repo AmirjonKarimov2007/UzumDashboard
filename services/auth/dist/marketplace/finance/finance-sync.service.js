@@ -153,7 +153,9 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         const fines = [];
         const refunds = [];
         for (const e of payments) {
-            const amount = Math.abs(Number(e.paymentPrice ?? e.amount ?? 0));
+            const unitPrice = Math.abs(Number(e.paymentPrice ?? 0));
+            const qty = Number(e.amount ?? 1) || 1;
+            const amount = unitPrice * qty;
             if (!amount)
                 continue;
             const source = String(e.source || '').trim();
@@ -453,7 +455,9 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         const otherExpenses = [];
         const expensesByType = {};
         for (const e of expenses) {
-            const amount = Math.abs(Number(e.paymentPrice ?? e.amount ?? 0));
+            const amount = e.paymentPrice != null
+                ? Math.abs(Number(e.paymentPrice)) * (Number(e.amount ?? 1) || 1)
+                : Math.abs(Number(e.amount ?? 0));
             const source = String(e.source || 'UNKNOWN');
             const description = String(e.name || e.description || e.comment || source);
             const status = String(e.status || 'UNKNOWN').toUpperCase();

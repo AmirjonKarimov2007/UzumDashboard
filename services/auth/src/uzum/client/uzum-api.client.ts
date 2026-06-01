@@ -6,7 +6,28 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
+import { Agent as HttpAgent } from 'http';
+import { Agent as HttpsAgent } from 'https';
 import { PrismaService } from '../../common/database/prisma.service';
+
+// ─── Shared keep-alive connection pools ──────────────────────────────────────
+// Reusing TCP+TLS connections across requests avoids a fresh handshake
+// (~100-300ms) on every Uzum API call — the single biggest latency win.
+// One pool per process, shared by all axios instances.
+const keepAliveHttps = new HttpsAgent({
+  keepAlive: true,
+  keepAliveMsecs: 15_000,
+  maxSockets: 64,
+  maxFreeSockets: 16,
+  scheduling: 'lifo',
+});
+const keepAliveHttp = new HttpAgent({
+  keepAlive: true,
+  keepAliveMsecs: 15_000,
+  maxSockets: 64,
+  maxFreeSockets: 16,
+  scheduling: 'lifo',
+});
 
 export interface UzumRateLimitInfo {
   remaining: number;
@@ -131,10 +152,14 @@ export class UzumApiClient {
     return axios.create({
       baseURL: this.baseUrl,
       timeout: 30_000,
+      // Reuse pooled keep-alive connections instead of a new TLS handshake per call
+      httpAgent: keepAliveHttp,
+      httpsAgent: keepAliveHttps,
       headers: {
         Authorization: apiKey,
         Accept: '*/*',
         'User-Agent': 'Uzum-Dashboard/1.0',
+        Connection: 'keep-alive',
       },
       paramsSerializer: {
         serialize: (params) => {
@@ -217,7 +242,9 @@ export class UzumApiClient {
         const responseTimeMs = Date.now() - start;
         const rateInfo = this.extractRateLimitInfo(response.headers as Record<string, string>);
 
-        await Promise.all([
+        // Fire-and-forget: don't block the response on DB bookkeeping writes.
+        // These were adding DB round-trip latency to every single API call.
+        void Promise.allSettled([
           this.logApiCall(storeId, endpoint, method, response.status, responseTimeMs, rateInfo),
           this.persistRateLimitInfo(storeId, rateInfo),
         ]);
@@ -235,7 +262,8 @@ export class UzumApiClient {
         const responseTimeMs = Date.now() - start;
         const statusCode = axiosErr.response?.status || 0;
 
-        await this.logApiCall(
+        // Fire-and-forget error log — don't delay throwing/retrying.
+        void this.logApiCall(
           storeId,
           endpoint,
           method,
@@ -243,7 +271,7 @@ export class UzumApiClient {
           responseTimeMs,
           undefined,
           axiosErr.message,
-        );
+        ).catch(() => {});
 
         if (statusCode === 401) {
           throw new UnauthorizedException('Uzum API kaliti noto\'g\'ri — Uzum Seller panel → API sozlamalaridan yangi kalit oling');

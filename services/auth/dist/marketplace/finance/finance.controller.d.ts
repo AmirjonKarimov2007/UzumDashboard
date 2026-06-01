@@ -29,12 +29,12 @@ export declare class FinanceController {
     })[]>;
     getTransactions(storeId: string, page: number, size: number, dateFrom?: string, dateTo?: string): Promise<{
         data: {
-            total: import("@prisma/client/runtime/library").Decimal;
-            commission: import("@prisma/client/runtime/library").Decimal;
-            profit: import("@prisma/client/runtime/library").Decimal;
-            status: import(".prisma/client").$Enums.OrderStatus;
             id: string;
+            status: import(".prisma/client").$Enums.OrderStatus;
+            total: import("@prisma/client/runtime/library").Decimal;
+            profit: import("@prisma/client/runtime/library").Decimal;
             uzumOrderId: string;
+            commission: import("@prisma/client/runtime/library").Decimal;
             orderedAt: Date | null;
             items: {
                 name: string;
