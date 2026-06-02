@@ -123,6 +123,7 @@ model Store {
   user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   connection StoreConnection?
   products   Product[]
+  productMeta ProductMeta[]
   orders     Order[]
   syncLogs   SyncLog[]
   snapshots  AnalyticsSnapshot[]
@@ -237,6 +238,29 @@ enum ProductStatus {
   WARNING
   ARCHIVE
   DEFECTED
+}
+
+// User-entered overrides for live Uzum products (cost price, custom codes).
+// Keyed by the Uzum SKU id within a store. Products themselves are fetched
+// live from Uzum; this table only stores what the seller adds in the dashboard.
+model ProductMeta {
+  id          String   @id @default(uuid())
+  storeId     String
+  skuId       String
+  productId   String?
+  costPrice   Decimal? @db.Decimal(14, 2) // tan narx
+  articleCode String?
+  xid         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, skuId])
+  @@index([storeId])
+  @@index([articleCode])
+  @@index([xid])
+  @@map("product_meta")
 }
 
 // ============================================

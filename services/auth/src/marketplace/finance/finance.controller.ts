@@ -38,6 +38,23 @@ export class FinanceController {
    * Lightweight summary: just sum of LOGISTIKA + sum of JARIMALAR + their combined total.
    * Hits /v1/finance/expenses once (size=1500, no date filter). Cached 5 min.
    */
+  /**
+   * Bosh sahifa (dashboard) KPIs: Jami daromad (sellerProfit), bugungi buyurtmalar,
+   * faol mahsulotlar, tan narx asosida sof foyda. Cached 5 min.
+   */
+  @Get('dashboard-summary')
+  getDashboardSummary(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('timeRange') timeRange?: string,
+    @Query('force') force?: string,
+  ) {
+    return this.financeSyncService.getDashboardSummary(userId, storeId, {
+      timeRange: timeRange || 'today',
+      force: force === '1' || force === 'true',
+    });
+  }
+
   @Get('logistics-fines')
   getLogisticsAndFines(
     @CurrentUser('id') userId: string,
