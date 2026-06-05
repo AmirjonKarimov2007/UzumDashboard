@@ -30,10 +30,12 @@ let FinanceController = class FinanceController {
             force: force === '1' || force === 'true',
         });
     }
-    getDashboardSummary(userId, storeId, timeRange, force) {
+    getDashboardSummary(userId, storeId, timeRange, force, dateFrom, dateTo) {
         return this.financeSyncService.getDashboardSummary(userId, storeId, {
             timeRange: timeRange || 'today',
             force: force === '1' || force === 'true',
+            dateFrom: dateFrom ? Number(dateFrom) : undefined,
+            dateTo: dateTo ? Number(dateTo) : undefined,
         });
     }
     getLogisticsAndFines(userId, storeId, force) {
@@ -199,8 +201,10 @@ __decorate([
     __param(1, (0, common_1.Param)('storeId')),
     __param(2, (0, common_1.Query)('timeRange')),
     __param(3, (0, common_1.Query)('force')),
+    __param(4, (0, common_1.Query)('dateFrom')),
+    __param(5, (0, common_1.Query)('dateTo')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:paramtypes", [String, String, String, String, String, String]),
     __metadata("design:returntype", void 0)
 ], FinanceController.prototype, "getDashboardSummary", null);
 __decorate([

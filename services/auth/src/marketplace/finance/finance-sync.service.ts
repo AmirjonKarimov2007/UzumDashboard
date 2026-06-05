@@ -406,14 +406,23 @@ export class FinanceSyncService {
   async getDashboardSummary(
     userId: string,
     storeId: string,
-    opts: { force?: boolean; timeRange?: string } = {},
+    opts: { force?: boolean; timeRange?: string; dateFrom?: number; dateTo?: number } = {},
   ) {
     const timeRange = opts.timeRange || 'today';
+    // Custom sana oralig'i berilsa, uni soatga buketlab kesh kalitiga aylantiramiz
+    // (bir xil oraliq qayta tanlanganda kesh barqaror bo'ladi).
+    const hasCustom = opts.dateFrom != null && opts.dateTo != null;
+    const bucket = (ms?: number) => (ms != null ? Math.floor(ms / (60 * 60 * 1000)) : 'x');
+    const key = hasCustom
+      ? `dashboard:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}`
+      : `dashboard:${storeId}:${timeRange}`;
     return this.swr({
-      key: `dashboard:${storeId}:${timeRange}`,
+      key,
       ttlMs: this.RECON_CACHE_TTL_MS,
       force: opts.force,
-      producer: () => this.computeDashboardSummary(userId, storeId, timeRange, opts.force),
+      producer: () => this.computeDashboardSummary(userId, storeId, timeRange, opts.force, {
+        dateFrom: opts.dateFrom, dateTo: opts.dateTo,
+      }),
     });
   }
 
@@ -486,11 +495,25 @@ export class FinanceSyncService {
     return { activeProducts, skusWithCost: costBySkuId.size, costByFullTitle, costByProductId };
   }
 
-  private async computeDashboardSummary(userId: string, storeId: string, timeRange: string, force?: boolean) {
+  private async computeDashboardSummary(
+    userId: string,
+    storeId: string,
+    timeRange: string,
+    force?: boolean,
+    custom?: { dateFrom?: number; dateTo?: number },
+  ) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    const { from, to } = this.resolveRange(timeRange);
-    const fromMs = from.getTime();
-    const toMs = to.getTime();
+    // Custom sana oralig'i ustun: berilsa preset timeRange'ni inkor qiladi.
+    let fromMs: number;
+    let toMs: number;
+    if (custom?.dateFrom != null && custom?.dateTo != null) {
+      fromMs = Math.min(custom.dateFrom, custom.dateTo);
+      toMs = Math.max(custom.dateFrom, custom.dateTo);
+    } else {
+      const { from, to } = this.resolveRange(timeRange);
+      fromMs = from.getTime();
+      toMs = to.getTime();
+    }
 
     // ── Bitta date-filtered finance/orders so'rovi (status filtri YO'Q) ──
     // /v2/fbs/orders bu do'kon uchun bo'sh; /v1/finance/orders esa sellerProfit,

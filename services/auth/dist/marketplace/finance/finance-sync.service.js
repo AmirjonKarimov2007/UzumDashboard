@@ -319,11 +319,18 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
     }
     async getDashboardSummary(userId, storeId, opts = {}) {
         const timeRange = opts.timeRange || 'today';
+        const hasCustom = opts.dateFrom != null && opts.dateTo != null;
+        const bucket = (ms) => (ms != null ? Math.floor(ms / (60 * 60 * 1000)) : 'x');
+        const key = hasCustom
+            ? `dashboard:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}`
+            : `dashboard:${storeId}:${timeRange}`;
         return this.swr({
-            key: `dashboard:${storeId}:${timeRange}`,
+            key,
             ttlMs: this.RECON_CACHE_TTL_MS,
             force: opts.force,
-            producer: () => this.computeDashboardSummary(userId, storeId, timeRange, opts.force),
+            producer: () => this.computeDashboardSummary(userId, storeId, timeRange, opts.force, {
+                dateFrom: opts.dateFrom, dateTo: opts.dateTo,
+            }),
         });
     }
     getCostResolution(userId, storeId, force) {
@@ -381,11 +388,19 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         }
         return { activeProducts, skusWithCost: costBySkuId.size, costByFullTitle, costByProductId };
     }
-    async computeDashboardSummary(userId, storeId, timeRange, force) {
+    async computeDashboardSummary(userId, storeId, timeRange, force, custom) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const { from, to } = this.resolveRange(timeRange);
-        const fromMs = from.getTime();
-        const toMs = to.getTime();
+        let fromMs;
+        let toMs;
+        if (custom?.dateFrom != null && custom?.dateTo != null) {
+            fromMs = Math.min(custom.dateFrom, custom.dateTo);
+            toMs = Math.max(custom.dateFrom, custom.dateTo);
+        }
+        else {
+            const { from, to } = this.resolveRange(timeRange);
+            fromMs = from.getTime();
+            toMs = to.getTime();
+        }
         const PAGE_SIZE = 500;
         const MAX_PAGES = 40;
         const fetchAll = async () => {

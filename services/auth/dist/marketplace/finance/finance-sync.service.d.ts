@@ -33,6 +33,8 @@ export declare class FinanceSyncService {
     getDashboardSummary(userId: string, storeId: string, opts?: {
         force?: boolean;
         timeRange?: string;
+        dateFrom?: number;
+        dateTo?: number;
     }): Promise<any>;
     private getCostResolution;
     private computeCostResolution;

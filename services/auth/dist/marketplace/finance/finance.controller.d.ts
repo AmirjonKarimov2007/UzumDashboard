@@ -7,7 +7,7 @@ export declare class FinanceController {
     private readonly prisma;
     constructor(analyticsService: AnalyticsService, financeSyncService: FinanceSyncService, prisma: PrismaService);
     getProcessingAndWithdraw(userId: string, storeId: string, force?: string): Promise<any>;
-    getDashboardSummary(userId: string, storeId: string, timeRange?: string, force?: string): Promise<any>;
+    getDashboardSummary(userId: string, storeId: string, timeRange?: string, force?: string, dateFrom?: string, dateTo?: string): Promise<any>;
     getLogisticsAndFines(userId: string, storeId: string, force?: string): Promise<any>;
     getReconciliation(userId: string, storeId: string, dateFrom?: string, dateTo?: string): Promise<any>;
     getFinanceSummary(storeId: string, timeRange?: string): Promise<{

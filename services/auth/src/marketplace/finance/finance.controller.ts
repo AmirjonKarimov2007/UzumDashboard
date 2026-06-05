@@ -48,10 +48,14 @@ export class FinanceController {
     @Param('storeId') storeId: string,
     @Query('timeRange') timeRange?: string,
     @Query('force') force?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     return this.financeSyncService.getDashboardSummary(userId, storeId, {
       timeRange: timeRange || 'today',
       force: force === '1' || force === 'true',
+      dateFrom: dateFrom ? Number(dateFrom) : undefined,
+      dateTo: dateTo ? Number(dateTo) : undefined,
     });
   }
 
