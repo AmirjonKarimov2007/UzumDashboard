@@ -30,6 +30,12 @@ let FinanceController = class FinanceController {
             force: force === '1' || force === 'true',
         });
     }
+    getDashboardSummary(userId, storeId, timeRange, force) {
+        return this.financeSyncService.getDashboardSummary(userId, storeId, {
+            timeRange: timeRange || 'today',
+            force: force === '1' || force === 'true',
+        });
+    }
     getLogisticsAndFines(userId, storeId, force) {
         return this.financeSyncService.getLogisticsAndFines(userId, storeId, {
             force: force === '1' || force === 'true',
@@ -187,6 +193,16 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], FinanceController.prototype, "getProcessingAndWithdraw", null);
+__decorate([
+    (0, common_1.Get)('dashboard-summary'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('timeRange')),
+    __param(3, (0, common_1.Query)('force')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], FinanceController.prototype, "getDashboardSummary", null);
 __decorate([
     (0, common_1.Get)('logistics-fines'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),

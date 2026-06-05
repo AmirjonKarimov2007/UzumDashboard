@@ -11,6 +11,8 @@ const common_1 = require("@nestjs/common");
 const products_controller_1 = require("./products.controller");
 const products_service_1 = require("./products.service");
 const products_sync_service_1 = require("./products-sync.service");
+const product_meta_controller_1 = require("./product-meta.controller");
+const product_meta_service_1 = require("./product-meta.service");
 const uzum_module_1 = require("../../uzum/uzum.module");
 const database_module_1 = require("../../common/database/database.module");
 let ProductsModule = class ProductsModule {
@@ -19,8 +21,8 @@ exports.ProductsModule = ProductsModule;
 exports.ProductsModule = ProductsModule = __decorate([
     (0, common_1.Module)({
         imports: [database_module_1.DatabaseModule, uzum_module_1.UzumModule],
-        controllers: [products_controller_1.ProductsController],
-        providers: [products_service_1.ProductsService, products_sync_service_1.ProductsSyncService],
+        controllers: [products_controller_1.ProductsController, product_meta_controller_1.ProductMetaController],
+        providers: [products_service_1.ProductsService, products_sync_service_1.ProductsSyncService, product_meta_service_1.ProductMetaService],
         exports: [products_service_1.ProductsService, products_sync_service_1.ProductsSyncService],
     })
 ], ProductsModule);

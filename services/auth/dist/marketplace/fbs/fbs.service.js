@@ -20,6 +20,9 @@ let FbsService = FbsService_1 = class FbsService {
         this.storesService = storesService;
         this.logger = new common_1.Logger(FbsService_1.name);
         this.countsCache = new Map();
+        this.productsCache = new Map();
+        this.productsInflight = new Map();
+        this.PRODUCTS_TTL_MS = 2 * 60 * 1000;
     }
     async getOrders(userId, storeId, status = 'PACKING', page = 0, size = 50, extra = {}) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
@@ -38,10 +41,31 @@ let FbsService = FbsService_1 = class FbsService {
         return Buffer.from(base64, 'base64');
     }
     async getLiveProducts(userId, storeId, page = 0, size = 50, filter, searchQuery, sortBy, order) {
-        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        return this.uzumClient.getProducts(storeId, apiKey, uzumShopId, {
-            page, size, filter, searchQuery, sortBy, order,
-        });
+        const key = `${storeId}:${page}:${size}:${filter || ''}:${searchQuery || ''}:${sortBy || ''}:${order || ''}`;
+        const produce = async () => {
+            const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+            return this.uzumClient.getProducts(storeId, apiKey, uzumShopId, {
+                page, size, filter, searchQuery, sortBy, order,
+            });
+        };
+        const run = () => {
+            const existing = this.productsInflight.get(key);
+            if (existing)
+                return existing;
+            const p = produce()
+                .then((payload) => { this.productsCache.set(key, { fetchedAt: Date.now(), payload }); return payload; })
+                .finally(() => this.productsInflight.delete(key));
+            this.productsInflight.set(key, p);
+            return p;
+        };
+        const cached = this.productsCache.get(key);
+        if (cached) {
+            if (Date.now() - cached.fetchedAt >= this.PRODUCTS_TTL_MS && !this.productsInflight.has(key)) {
+                void run().catch((e) => this.logger.warn(`Products bg refresh failed: ${e?.message}`));
+            }
+            return cached.payload;
+        }
+        return run();
     }
     async getLiveFinanceOrders(userId, storeId, page = 0, size = 50, dateFrom, dateTo) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);

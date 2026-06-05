@@ -7,6 +7,10 @@ export class FbsService {
   private readonly logger = new Logger(FbsService.name);
   // Per-store in-memory cache for counts (60s TTL)
   private countsCache = new Map<string, { data: Record<string, number>; expiresAt: number }>();
+  // Stale-while-revalidate cache for live product lists (avoids blocking on Uzum)
+  private productsCache = new Map<string, { fetchedAt: number; payload: any }>();
+  private productsInflight = new Map<string, Promise<any>>();
+  private readonly PRODUCTS_TTL_MS = 2 * 60 * 1000;
 
   constructor(
     private readonly uzumClient: UzumApiClient,
@@ -57,10 +61,32 @@ export class FbsService {
     sortBy?: string,
     order?: 'asc' | 'desc',
   ) {
-    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    return this.uzumClient.getProducts(storeId, apiKey, uzumShopId, {
-      page, size, filter, searchQuery, sortBy, order,
-    });
+    const key = `${storeId}:${page}:${size}:${filter || ''}:${searchQuery || ''}:${sortBy || ''}:${order || ''}`;
+    const produce = async () => {
+      const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+      return this.uzumClient.getProducts(storeId, apiKey, uzumShopId, {
+        page, size, filter, searchQuery, sortBy, order,
+      });
+    };
+    const run = () => {
+      const existing = this.productsInflight.get(key);
+      if (existing) return existing;
+      const p = produce()
+        .then((payload) => { this.productsCache.set(key, { fetchedAt: Date.now(), payload }); return payload; })
+        .finally(() => this.productsInflight.delete(key));
+      this.productsInflight.set(key, p);
+      return p;
+    };
+
+    const cached = this.productsCache.get(key);
+    if (cached) {
+      // Stale-while-revalidate: return instantly, refresh in background if stale.
+      if (Date.now() - cached.fetchedAt >= this.PRODUCTS_TTL_MS && !this.productsInflight.has(key)) {
+        void run().catch((e) => this.logger.warn(`Products bg refresh failed: ${e?.message}`));
+      }
+      return cached.payload;
+    }
+    return run();
   }
 
   async getLiveFinanceOrders(

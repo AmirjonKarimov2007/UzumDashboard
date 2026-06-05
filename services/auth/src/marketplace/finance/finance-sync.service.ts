@@ -146,6 +146,69 @@ export class FinanceSyncService {
     private readonly storesService: StoresService,
   ) {}
 
+  // ─── Generic Stale-While-Revalidate cache ──────────────────────────────
+  //
+  // The single biggest speed win: never block a page on Uzum after the first
+  // successful fetch. Behaviour per key:
+  //   • fresh (< ttl)        → return memory instantly
+  //   • stale (>= ttl)       → return stale instantly + refresh in background
+  //   • cold (no memory)     → warm from disk if present (instant), else fetch
+  //   • force                → fetch fresh, await
+  // Disk persistence means even a server restart serves instantly.
+  private swrStore = new Map<string, { fetchedAt: number; payload: any }>();
+  private swrInflight = new Map<string, Promise<any>>();
+
+  private swrDiskPath(key: string): string {
+    const safe = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return path.join(this.diskCacheDir, `swr-${safe}.json`);
+  }
+
+  private swrRun(key: string, producer: () => Promise<any>): Promise<any> {
+    const existing = this.swrInflight.get(key);
+    if (existing) return existing;
+    const p = (async () => {
+      const payload = await producer();
+      this.swrStore.set(key, { fetchedAt: Date.now(), payload });
+      void this.writeDiskCache(this.swrDiskPath(key), payload);
+      return payload;
+    })().finally(() => this.swrInflight.delete(key));
+    this.swrInflight.set(key, p);
+    return p;
+  }
+
+  private swrRevalidate(key: string, producer: () => Promise<any>) {
+    if (this.swrInflight.has(key)) return;
+    void this.swrRun(key, producer).catch((e) =>
+      this.logger.warn(`SWR background refresh failed (${key}): ${e?.message}`),
+    );
+  }
+
+  private async swr(opts: {
+    key: string;
+    ttlMs: number;
+    force?: boolean;
+    producer: () => Promise<any>;
+  }): Promise<any> {
+    const { key, ttlMs, force, producer } = opts;
+    if (force) return this.swrRun(key, producer);
+
+    const now = Date.now();
+    let mem = this.swrStore.get(key);
+    if (!mem) {
+      const disk = await this.readDiskCache(this.swrDiskPath(key));
+      if (disk) {
+        this.swrStore.set(key, disk);
+        mem = disk;
+      }
+    }
+    if (mem) {
+      const fresh = now - mem.fetchedAt < ttlMs;
+      if (!fresh) this.swrRevalidate(key, producer);
+      return { ...mem.payload, _cached: fresh ? 'fresh' : 'stale' };
+    }
+    return this.swrRun(key, producer);
+  }
+
   // ─── Lightweight Logistics + Fines summary ─────────────────────────────
   //
   // Hits /v1/finance/expenses?page=0&size=1500&shopId=X&shopIds=X once,
@@ -153,39 +216,31 @@ export class FinanceSyncService {
   //   • logistics  — source matches "Logistika"
   //   • fines      — source is "Uzum Market" OR matches "ombor" (Uzum warehouse fines)
   // Returns just the totals + counts — no balance, no P&L, no other expense buckets.
-  // Cached for 5 minutes per store.
-  private logisticsFinesCache = new Map<string, { fetchedAt: number; payload: any }>();
+  // Served via stale-while-revalidate (instant after first load).
 
   async getLogisticsAndFines(userId: string, storeId: string, opts: { force?: boolean } = {}) {
-    const cacheKey = storeId;
-    const cached = this.logisticsFinesCache.get(cacheKey);
-    if (!opts.force && cached && Date.now() - cached.fetchedAt < this.RECON_CACHE_TTL_MS) {
-      return { ...cached.payload, _cached: 'memory' as const };
-    }
+    return this.swr({
+      key: `logfines:${storeId}`,
+      ttlMs: this.RECON_CACHE_TTL_MS,
+      force: opts.force,
+      producer: () => this.computeLogisticsAndFines(userId, storeId),
+    });
+  }
 
+  private async computeLogisticsAndFines(userId: string, storeId: string) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
 
-    // Dynamic size: sum of FBS order counts across all statuses + 50% buffer.
-    // Rationale: number of expense entries roughly scales with order volume; a
-    // hardcoded size=1500 either under-fetches (large sellers) or wastes a slot
-    // (small sellers). A 50% buffer covers platform-level expenses not tied 1:1
-    // to orders. Clamped to [100, 5000] for safety.
-    const fbsStatuses = [
-      'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
-      'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
-      'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
-    ];
-    let totalOrders = 0;
-    for (const st of fbsStatuses) {
-      totalOrders += await this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, st);
-      await new Promise((r) => setTimeout(r, 200));
+    // Paginate expenses using Uzum's `totalElements` to know when to stop — no more
+    // 11 separate FBS-count calls just to guess a size. One big page usually suffices.
+    const SIZE = 1500;
+    const payments: any[] = [];
+    for (let page = 0; page < 20; page++) {
+      const { payments: pg, totalElements } = await this.uzumClient.getRawExpenses(
+        storeId, apiKey, uzumShopId, page, SIZE,
+      );
+      payments.push(...pg);
+      if (pg.length < SIZE || payments.length >= totalElements) break;
     }
-    const dynamicSize = Math.min(5000, Math.max(100, Math.ceil(totalOrders * 1.5)));
-    this.logger.log(
-      `LogisticsAndFines: store=${storeId} totalFbsOrders=${totalOrders} → expenses size=${dynamicSize}`,
-    );
-
-    const { payments } = await this.uzumClient.getRawExpenses(storeId, apiKey, uzumShopId, 0, dynamicSize);
 
     type Item = { id: string; amount: number; source: string; description: string; date: number | null; status: string };
     const logistics: Item[] = [];
@@ -239,15 +294,13 @@ export class FinanceSyncService {
       refundsTotal,
       refundsCount: refunds.length,
       totalExpenses: payments.length,
-      // How `size` was chosen — surfaced for transparency / debugging
-      fbsOrdersCount: totalOrders,
-      requestedSize: dynamicSize,
+      fbsOrdersCount: payments.length,
+      requestedSize: payments.length,
       logistics,
       fines,
       refunds,
     };
 
-    this.logisticsFinesCache.set(cacheKey, { fetchedAt: Date.now(), payload });
     return payload;
   }
 
@@ -259,87 +312,66 @@ export class FinanceSyncService {
   // The `size` parameter is computed the same way as logistics-fines: sum of
   // FBS order counts × 1.5, but EXCLUDING RETURNED and CANCELED (+ PENDING_CANCELLATION)
   // — those orders never reach a payable state.
-  private procWithdrawCache = new Map<string, { fetchedAt: number; payload: any }>();
-
   async getProcessingAndWithdraw(userId: string, storeId: string, opts: { force?: boolean } = {}) {
-    const cacheKey = storeId;
-    const cached = this.procWithdrawCache.get(cacheKey);
-    if (!opts.force && cached && Date.now() - cached.fetchedAt < this.RECON_CACHE_TTL_MS) {
-      return { ...cached.payload, _cached: 'memory' as const };
-    }
+    return this.swr({
+      key: `procwithdraw:${storeId}`,
+      ttlMs: this.RECON_CACHE_TTL_MS,
+      force: opts.force,
+      producer: () => this.computeProcessingAndWithdraw(userId, storeId),
+    });
+  }
 
+  private async computeProcessingAndWithdraw(userId: string, storeId: string) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
 
-    // Active/completed statuses — what's "in flight" or already delivered.
-    // Excludes RETURNED, CANCELED, PENDING_CANCELLATION per product spec.
-    const activeStatuses = [
-      'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
-      'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT', 'COMPLETED',
-    ];
-    let totalActive = 0;
-    for (const st of activeStatuses) {
-      totalActive += await this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, st);
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    const size = Math.min(5000, Math.max(100, Math.ceil(totalActive * 1.5)));
-    this.logger.log(
-      `ProcessingAndWithdraw: store=${storeId} totalActive=${totalActive} → size=${size}`,
-    );
+    // Paginate each status by Uzum's `total` (totalElements) — no FBS-count loop.
+    const SIZE = 500;
+    const fetchAll = async (status: string) => {
+      const items: any[] = [];
+      let apiTotal = 0;
+      for (let page = 0; page < 40; page++) {
+        const { orderItems, total } = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
+          page, size: SIZE, statuses: [status], group: false,
+        });
+        apiTotal = total;
+        items.push(...orderItems);
+        if (orderItems.length < SIZE || items.length >= total) break;
+      }
+      return { items, apiTotal };
+    };
 
-    // Pul yig'indisi — BARCHA item'lar bo'yicha (dublicate'lar ham qo'shiladi,
-    // chunki har bir item alohida pul oqimi).
-    // Soni esa — UNIQUE orderId bo'yicha (1 ta order'da bir necha SKU bo'lishi mumkin
-    // va Uzum API ularning hammasini alohida orderItem qilib qaytaradi).
+    // Pul yig'indisi — BARCHA item'lar bo'yicha; soni — UNIQUE orderId bo'yicha.
     const aggregate = (items: any[]) => {
       let total = 0;
       const uniqueOrderIds = new Set<string | number>();
       for (const it of items) {
-        const profit = Number(it.sellerProfit || 0);
-        const logistics = Number(it.logisticDeliveryFee || 0);
-        total += profit + logistics;
+        total += Number(it.sellerProfit || 0) + Number(it.logisticDeliveryFee || 0);
         if (it.orderId != null) uniqueOrderIds.add(it.orderId);
       }
       return { total, uniqueCount: uniqueOrderIds.size, itemsCount: items.length };
     };
 
-    // statuses=PROCESSING → "Jarayonda"
-    const processingResp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
-      page: 0,
-      size,
-      statuses: ['PROCESSING'],
-      group: false,
-    });
-    const processingAgg = aggregate(processingResp.orderItems);
+    const [processing, withdraw] = await Promise.all([fetchAll('PROCESSING'), fetchAll('TO_WITHDRAW')]);
+    const processingAgg = aggregate(processing.items);
+    const withdrawAgg = aggregate(withdraw.items);
 
-    // statuses=TO_WITHDRAW → "To'langan"
-    const withdrawResp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
-      page: 0,
-      size,
-      statuses: ['TO_WITHDRAW'],
-      group: false,
-    });
-    const withdrawAgg = aggregate(withdrawResp.orderItems);
-
-    const payload = {
+    return {
       processing: {
-        total: processingAgg.total,        // pul yig'indisi (barcha items)
-        count: processingAgg.uniqueCount,  // unique orderId soni
+        total: processingAgg.total,
+        count: processingAgg.uniqueCount,
         itemsCount: processingAgg.itemsCount,
-        apiTotal: processingResp.total,
+        apiTotal: processing.apiTotal,
       },
       withdraw: {
         total: withdrawAgg.total,
         count: withdrawAgg.uniqueCount,
         itemsCount: withdrawAgg.itemsCount,
-        apiTotal: withdrawResp.total,
+        apiTotal: withdraw.apiTotal,
       },
       combined: processingAgg.total + withdrawAgg.total,
-      fbsActiveOrders: totalActive,
-      requestedSize: size,
+      fbsActiveOrders: processingAgg.uniqueCount + withdrawAgg.uniqueCount,
+      requestedSize: SIZE,
     };
-
-    this.procWithdrawCache.set(cacheKey, { fetchedAt: Date.now(), payload });
-    return payload;
   }
 
   // ─── Bosh sahifa (dashboard) summary ───────────────────────────────────
@@ -354,8 +386,7 @@ export class FinanceSyncService {
   //   • totalCost     — Σ (sold qty × tan narx) using ProductMeta.costPrice per SKU
   //   • netProfit     — Sof foyda = revenue − totalCost
   //
-  // Cached 5 min per (store, range).
-  private dashboardCache = new Map<string, { fetchedAt: number; payload: any }>();
+  // Served via stale-while-revalidate (instant after first load).
 
   /** Resolve a dashboard time-range id to a [from, to] window. */
   private resolveRange(timeRange: string): { from: Date; to: Date } {
@@ -378,12 +409,15 @@ export class FinanceSyncService {
     opts: { force?: boolean; timeRange?: string } = {},
   ) {
     const timeRange = opts.timeRange || 'today';
-    const cacheKey = `${storeId}:${timeRange}`;
-    const cached = this.dashboardCache.get(cacheKey);
-    if (!opts.force && cached && Date.now() - cached.fetchedAt < this.RECON_CACHE_TTL_MS) {
-      return { ...cached.payload, _cached: 'memory' as const };
-    }
+    return this.swr({
+      key: `dashboard:${storeId}:${timeRange}`,
+      ttlMs: this.RECON_CACHE_TTL_MS,
+      force: opts.force,
+      producer: () => this.computeDashboardSummary(userId, storeId, timeRange),
+    });
+  }
 
+  private async computeDashboardSummary(userId: string, storeId: string, timeRange: string) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
     const { from, to } = this.resolveRange(timeRange);
     const fromMs = from.getTime();
@@ -517,7 +551,6 @@ export class FinanceSyncService {
       financeItems,
     };
 
-    this.dashboardCache.set(cacheKey, { fetchedAt: Date.now(), payload });
     return payload;
   }
 

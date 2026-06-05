@@ -126,29 +126,70 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         this.reconInflight = new Map();
         this.diskCacheDir = path.join(process.cwd(), '.cache', 'finance');
         this.diskCacheTtlMs = 24 * 60 * 60 * 1000;
-        this.logisticsFinesCache = new Map();
-        this.procWithdrawCache = new Map();
+        this.swrStore = new Map();
+        this.swrInflight = new Map();
+    }
+    swrDiskPath(key) {
+        const safe = key.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return path.join(this.diskCacheDir, `swr-${safe}.json`);
+    }
+    swrRun(key, producer) {
+        const existing = this.swrInflight.get(key);
+        if (existing)
+            return existing;
+        const p = (async () => {
+            const payload = await producer();
+            this.swrStore.set(key, { fetchedAt: Date.now(), payload });
+            void this.writeDiskCache(this.swrDiskPath(key), payload);
+            return payload;
+        })().finally(() => this.swrInflight.delete(key));
+        this.swrInflight.set(key, p);
+        return p;
+    }
+    swrRevalidate(key, producer) {
+        if (this.swrInflight.has(key))
+            return;
+        void this.swrRun(key, producer).catch((e) => this.logger.warn(`SWR background refresh failed (${key}): ${e?.message}`));
+    }
+    async swr(opts) {
+        const { key, ttlMs, force, producer } = opts;
+        if (force)
+            return this.swrRun(key, producer);
+        const now = Date.now();
+        let mem = this.swrStore.get(key);
+        if (!mem) {
+            const disk = await this.readDiskCache(this.swrDiskPath(key));
+            if (disk) {
+                this.swrStore.set(key, disk);
+                mem = disk;
+            }
+        }
+        if (mem) {
+            const fresh = now - mem.fetchedAt < ttlMs;
+            if (!fresh)
+                this.swrRevalidate(key, producer);
+            return { ...mem.payload, _cached: fresh ? 'fresh' : 'stale' };
+        }
+        return this.swrRun(key, producer);
     }
     async getLogisticsAndFines(userId, storeId, opts = {}) {
-        const cacheKey = storeId;
-        const cached = this.logisticsFinesCache.get(cacheKey);
-        if (!opts.force && cached && Date.now() - cached.fetchedAt < this.RECON_CACHE_TTL_MS) {
-            return { ...cached.payload, _cached: 'memory' };
-        }
+        return this.swr({
+            key: `logfines:${storeId}`,
+            ttlMs: this.RECON_CACHE_TTL_MS,
+            force: opts.force,
+            producer: () => this.computeLogisticsAndFines(userId, storeId),
+        });
+    }
+    async computeLogisticsAndFines(userId, storeId) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const fbsStatuses = [
-            'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
-            'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
-            'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
-        ];
-        let totalOrders = 0;
-        for (const st of fbsStatuses) {
-            totalOrders += await this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, st);
-            await new Promise((r) => setTimeout(r, 200));
+        const SIZE = 1500;
+        const payments = [];
+        for (let page = 0; page < 20; page++) {
+            const { payments: pg, totalElements } = await this.uzumClient.getRawExpenses(storeId, apiKey, uzumShopId, page, SIZE);
+            payments.push(...pg);
+            if (pg.length < SIZE || payments.length >= totalElements)
+                break;
         }
-        const dynamicSize = Math.min(5000, Math.max(100, Math.ceil(totalOrders * 1.5)));
-        this.logger.log(`LogisticsAndFines: store=${storeId} totalFbsOrders=${totalOrders} → expenses size=${dynamicSize}`);
-        const { payments } = await this.uzumClient.getRawExpenses(storeId, apiKey, uzumShopId, 0, dynamicSize);
         const logistics = [];
         const fines = [];
         const refunds = [];
@@ -189,77 +230,226 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             refundsTotal,
             refundsCount: refunds.length,
             totalExpenses: payments.length,
-            fbsOrdersCount: totalOrders,
-            requestedSize: dynamicSize,
+            fbsOrdersCount: payments.length,
+            requestedSize: payments.length,
             logistics,
             fines,
             refunds,
         };
-        this.logisticsFinesCache.set(cacheKey, { fetchedAt: Date.now(), payload });
         return payload;
     }
     async getProcessingAndWithdraw(userId, storeId, opts = {}) {
-        const cacheKey = storeId;
-        const cached = this.procWithdrawCache.get(cacheKey);
-        if (!opts.force && cached && Date.now() - cached.fetchedAt < this.RECON_CACHE_TTL_MS) {
-            return { ...cached.payload, _cached: 'memory' };
-        }
+        return this.swr({
+            key: `procwithdraw:${storeId}`,
+            ttlMs: this.RECON_CACHE_TTL_MS,
+            force: opts.force,
+            producer: () => this.computeProcessingAndWithdraw(userId, storeId),
+        });
+    }
+    async computeProcessingAndWithdraw(userId, storeId) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const activeStatuses = [
-            'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
-            'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT', 'COMPLETED',
-        ];
-        let totalActive = 0;
-        for (const st of activeStatuses) {
-            totalActive += await this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, st);
-            await new Promise((r) => setTimeout(r, 200));
-        }
-        const size = Math.min(5000, Math.max(100, Math.ceil(totalActive * 1.5)));
-        this.logger.log(`ProcessingAndWithdraw: store=${storeId} totalActive=${totalActive} → size=${size}`);
+        const SIZE = 500;
+        const fetchAll = async (status) => {
+            const items = [];
+            let apiTotal = 0;
+            for (let page = 0; page < 40; page++) {
+                const { orderItems, total } = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
+                    page, size: SIZE, statuses: [status], group: false,
+                });
+                apiTotal = total;
+                items.push(...orderItems);
+                if (orderItems.length < SIZE || items.length >= total)
+                    break;
+            }
+            return { items, apiTotal };
+        };
         const aggregate = (items) => {
             let total = 0;
             const uniqueOrderIds = new Set();
             for (const it of items) {
-                const profit = Number(it.sellerProfit || 0);
-                const logistics = Number(it.logisticDeliveryFee || 0);
-                total += profit + logistics;
+                total += Number(it.sellerProfit || 0) + Number(it.logisticDeliveryFee || 0);
                 if (it.orderId != null)
                     uniqueOrderIds.add(it.orderId);
             }
             return { total, uniqueCount: uniqueOrderIds.size, itemsCount: items.length };
         };
-        const processingResp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
-            page: 0,
-            size,
-            statuses: ['PROCESSING'],
-            group: false,
-        });
-        const processingAgg = aggregate(processingResp.orderItems);
-        const withdrawResp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
-            page: 0,
-            size,
-            statuses: ['TO_WITHDRAW'],
-            group: false,
-        });
-        const withdrawAgg = aggregate(withdrawResp.orderItems);
-        const payload = {
+        const [processing, withdraw] = await Promise.all([fetchAll('PROCESSING'), fetchAll('TO_WITHDRAW')]);
+        const processingAgg = aggregate(processing.items);
+        const withdrawAgg = aggregate(withdraw.items);
+        return {
             processing: {
                 total: processingAgg.total,
                 count: processingAgg.uniqueCount,
                 itemsCount: processingAgg.itemsCount,
-                apiTotal: processingResp.total,
+                apiTotal: processing.apiTotal,
             },
             withdraw: {
                 total: withdrawAgg.total,
                 count: withdrawAgg.uniqueCount,
                 itemsCount: withdrawAgg.itemsCount,
-                apiTotal: withdrawResp.total,
+                apiTotal: withdraw.apiTotal,
             },
             combined: processingAgg.total + withdrawAgg.total,
-            fbsActiveOrders: totalActive,
-            requestedSize: size,
+            fbsActiveOrders: processingAgg.uniqueCount + withdrawAgg.uniqueCount,
+            requestedSize: SIZE,
         };
-        this.procWithdrawCache.set(cacheKey, { fetchedAt: Date.now(), payload });
+    }
+    resolveRange(timeRange) {
+        const to = new Date();
+        let from;
+        switch (timeRange) {
+            case 'week':
+                from = (0, date_fns_1.subDays)(to, 7);
+                break;
+            case 'month':
+                from = (0, date_fns_1.subDays)(to, 30);
+                break;
+            case 'quarter':
+                from = (0, date_fns_1.subDays)(to, 90);
+                break;
+            case 'year':
+                from = (0, date_fns_1.subDays)(to, 365);
+                break;
+            case 'today':
+            default:
+                from = (0, date_fns_1.startOfDay)(to);
+                break;
+        }
+        return { from, to };
+    }
+    async getDashboardSummary(userId, storeId, opts = {}) {
+        const timeRange = opts.timeRange || 'today';
+        return this.swr({
+            key: `dashboard:${storeId}:${timeRange}`,
+            ttlMs: this.RECON_CACHE_TTL_MS,
+            force: opts.force,
+            producer: () => this.computeDashboardSummary(userId, storeId, timeRange),
+        });
+    }
+    async computeDashboardSummary(userId, storeId, timeRange) {
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const { from, to } = this.resolveRange(timeRange);
+        const fromMs = from.getTime();
+        const toMs = to.getTime();
+        const PAGE_SIZE = 500;
+        const MAX_PAGES = 20;
+        const fetchStatus = async (status) => {
+            const out = [];
+            try {
+                for (let page = 0; page < MAX_PAGES; page++) {
+                    const resp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
+                        page, size: PAGE_SIZE, statuses: [status], group: false,
+                        dateFrom: fromMs, dateTo: toMs,
+                    });
+                    out.push(...resp.orderItems);
+                    if (resp.orderItems.length < PAGE_SIZE)
+                        break;
+                }
+            }
+            catch (err) {
+                this.logger.warn(`Dashboard: finance orders (${status}) fetch failed: ${err?.message}`);
+            }
+            return out;
+        };
+        const [allProducts, fbsOrdersTotal, metas, procItems, wdItems] = await Promise.all([
+            this.uzumClient
+                .getAllProducts(storeId, apiKey, uzumShopId)
+                .catch((err) => {
+                this.logger.warn(`Dashboard: product list fetch failed: ${err?.message}`);
+                return [];
+            }),
+            this.uzumClient
+                .getOrders(storeId, apiKey, [String(uzumShopId)], {
+                page: 0, size: 1, dateFrom: String(fromMs), dateTo: String(toMs),
+            })
+                .then((r) => r?.total ?? 0)
+                .catch((err) => {
+                this.logger.warn(`Dashboard: fbs orders total failed: ${err?.message}`);
+                return 0;
+            }),
+            this.prisma.productMeta.findMany({
+                where: { storeId, costPrice: { not: null } },
+                select: { skuId: true, costPrice: true },
+            }),
+            fetchStatus('PROCESSING'),
+            fetchStatus('TO_WITHDRAW'),
+        ]);
+        const activeProducts = allProducts.filter((p) => p?.status?.value === 'ACTIVE').length;
+        const costBySkuId = new Map();
+        for (const m of metas) {
+            if (m.costPrice != null)
+                costBySkuId.set(m.skuId, Number(m.costPrice));
+        }
+        const costByFullTitle = new Map();
+        const costsByProductId = new Map();
+        for (const p of allProducts) {
+            const pid = String(p?.productId ?? '');
+            for (const s of p?.skuList || []) {
+                const sid = s?.skuId != null ? String(s.skuId) : null;
+                if (!sid)
+                    continue;
+                const cp = costBySkuId.get(sid);
+                if (cp == null)
+                    continue;
+                if (s?.skuFullTitle)
+                    costByFullTitle.set(s.skuFullTitle, cp);
+                if (s?.skuTitle)
+                    costByFullTitle.set(s.skuTitle, cp);
+                if (pid) {
+                    if (!costsByProductId.has(pid))
+                        costsByProductId.set(pid, new Set());
+                    costsByProductId.get(pid).add(cp);
+                }
+            }
+        }
+        const costByProductId = new Map();
+        for (const [pid, set] of costsByProductId) {
+            if (set.size === 1)
+                costByProductId.set(pid, [...set][0]);
+        }
+        let revenue = 0;
+        let financeItems = 0;
+        let costUsd = 0;
+        let costedQty = 0;
+        let totalSoldQty = 0;
+        const orderIds = new Set();
+        const soldTitles = new Set();
+        for (const it of [...procItems, ...wdItems]) {
+            revenue += Number(it.sellerProfit || 0);
+            financeItems++;
+            if (it.orderId != null)
+                orderIds.add(it.orderId);
+            const qty = Number(it.amount || 0) - Number(it.amountReturns || 0);
+            if (qty <= 0)
+                continue;
+            totalSoldQty += qty;
+            if (it.skuTitle)
+                soldTitles.add(String(it.skuTitle));
+            let cp = it.skuTitle != null ? costByFullTitle.get(String(it.skuTitle)) : undefined;
+            if (cp == null && it.productId != null)
+                cp = costByProductId.get(String(it.productId));
+            if (cp != null) {
+                costUsd += cp * qty;
+                costedQty += qty;
+            }
+        }
+        const orders = fbsOrdersTotal || orderIds.size;
+        const payload = {
+            timeRange,
+            dateFrom: fromMs,
+            dateTo: toMs,
+            revenue,
+            orders,
+            activeProducts,
+            costUsd,
+            coverage: {
+                skusWithCost: costBySkuId.size,
+                skusSold: soldTitles.size,
+                costedQty,
+                totalSoldQty,
+            },
+            financeItems,
+        };
         return payload;
     }
     async getReconciliation(userId, storeId, opts = {}) {

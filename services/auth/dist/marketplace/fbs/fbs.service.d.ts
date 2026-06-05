@@ -5,6 +5,9 @@ export declare class FbsService {
     private readonly storesService;
     private readonly logger;
     private countsCache;
+    private productsCache;
+    private productsInflight;
+    private readonly PRODUCTS_TTL_MS;
     constructor(uzumClient: UzumApiClient, storesService: StoresService);
     getOrders(userId: string, storeId: string, status?: string, page?: number, size?: number, extra?: {
         scheme?: 'FBS' | 'DBS';
@@ -19,10 +22,7 @@ export declare class FbsService {
         orders: any[];
     }>;
     getLabelPdf(userId: string, storeId: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<Buffer | null>;
-    getLiveProducts(userId: string, storeId: string, page?: number, size?: number, filter?: string, searchQuery?: string, sortBy?: string, order?: 'asc' | 'desc'): Promise<{
-        products: any[];
-        total: number;
-    }>;
+    getLiveProducts(userId: string, storeId: string, page?: number, size?: number, filter?: string, searchQuery?: string, sortBy?: string, order?: 'asc' | 'desc'): Promise<any>;
     getLiveFinanceOrders(userId: string, storeId: string, page?: number, size?: number, dateFrom?: number, dateTo?: number): Promise<{
         orderItems: any[];
         total: number;

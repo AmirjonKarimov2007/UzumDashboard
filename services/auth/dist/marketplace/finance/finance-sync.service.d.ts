@@ -15,14 +15,26 @@ export declare class FinanceSyncService {
     private readDiskCache;
     private writeDiskCache;
     constructor(prisma: PrismaService, uzumClient: UzumApiClient, storesService: StoresService);
-    private logisticsFinesCache;
+    private swrStore;
+    private swrInflight;
+    private swrDiskPath;
+    private swrRun;
+    private swrRevalidate;
+    private swr;
     getLogisticsAndFines(userId: string, storeId: string, opts?: {
         force?: boolean;
     }): Promise<any>;
-    private procWithdrawCache;
+    private computeLogisticsAndFines;
     getProcessingAndWithdraw(userId: string, storeId: string, opts?: {
         force?: boolean;
     }): Promise<any>;
+    private computeProcessingAndWithdraw;
+    private resolveRange;
+    getDashboardSummary(userId: string, storeId: string, opts?: {
+        force?: boolean;
+        timeRange?: string;
+    }): Promise<any>;
+    private computeDashboardSummary;
     getReconciliation(userId: string, storeId: string, opts?: {
         dateFrom?: number;
         dateTo?: number;
