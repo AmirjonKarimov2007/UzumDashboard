@@ -413,77 +413,55 @@ export class FinanceSyncService {
       key: `dashboard:${storeId}:${timeRange}`,
       ttlMs: this.RECON_CACHE_TTL_MS,
       force: opts.force,
-      producer: () => this.computeDashboardSummary(userId, storeId, timeRange),
+      producer: () => this.computeDashboardSummary(userId, storeId, timeRange, opts.force),
     });
   }
 
-  private async computeDashboardSummary(userId: string, storeId: string, timeRange: string) {
+  // ── Tan narx resolution (mahsulot ro'yxati + ProductMeta) ──
+  // Mahsulot ro'yxati BARCHA davrlar uchun bir xil, shuning uchun uni alohida
+  // SWR kalitida keshlaymiz — "Bugun"→"Hafta"→"Oy" o'tishlarida qayta yuklanmaydi.
+  // Finance orderItems'da skuId YO'Q — faqat productId va skuTitle bor.
+  // skuTitle === product.skuFullTitle, shuning uchun skuFullTitle → costUsd
+  // (va productId → costUsd, agar mahsulotning barcha SKU'lari bir xil narxda) quramiz.
+  private getCostResolution(userId: string, storeId: string, force?: boolean): Promise<{
+    activeProducts: number;
+    skusWithCost: number;
+    costByFullTitle: Record<string, number>;
+    costByProductId: Record<string, number>;
+  }> {
+    return this.swr({
+      key: `costres:${storeId}`,
+      ttlMs: this.RECON_CACHE_TTL_MS,
+      force,
+      producer: () => this.computeCostResolution(userId, storeId),
+    });
+  }
+
+  private async computeCostResolution(userId: string, storeId: string) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    const { from, to } = this.resolveRange(timeRange);
-    const fromMs = from.getTime();
-    const toMs = to.getTime();
-
-    // Paginate one finance status (date-filtered) until exhausted (capped).
-    const PAGE_SIZE = 500;
-    const MAX_PAGES = 20; // safety cap → up to 10k items per status
-    const fetchStatus = async (status: string): Promise<any[]> => {
-      const out: any[] = [];
-      try {
-        for (let page = 0; page < MAX_PAGES; page++) {
-          const resp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
-            page, size: PAGE_SIZE, statuses: [status], group: false,
-            dateFrom: fromMs, dateTo: toMs,
-          });
-          out.push(...resp.orderItems);
-          if (resp.orderItems.length < PAGE_SIZE) break;
-        }
-      } catch (err: any) {
-        this.logger.warn(`Dashboard: finance orders (${status}) fetch failed: ${err?.message}`);
-      }
-      return out;
-    };
-
-    // ── Run everything concurrently (the big speed win) ──
-    //   • full product list (live Uzum) — for active count + SKU→cost resolution
-    //   • received-orders total in range (live Uzum, /v2/fbs/orders, no status → all)
-    //   • cost prices (local DB, keyed by skuId)
-    //   • PROCESSING + TO_WITHDRAW finance orders (parallel paginations)
-    const [allProducts, fbsOrdersTotal, metas, procItems, wdItems] = await Promise.all([
-      this.uzumClient
-        .getAllProducts(storeId, apiKey, uzumShopId)
-        .catch((err: any) => {
-          this.logger.warn(`Dashboard: product list fetch failed: ${err?.message}`);
-          return [] as any[];
-        }),
-      this.uzumClient
-        .getOrders(storeId, apiKey, [String(uzumShopId)], {
-          page: 0, size: 1, dateFrom: String(fromMs), dateTo: String(toMs),
-        })
-        .then((r) => r?.total ?? 0)
-        .catch((err: any) => {
-          this.logger.warn(`Dashboard: fbs orders total failed: ${err?.message}`);
-          return 0;
-        }),
+    const [allProducts, metas] = await Promise.all([
+      this.uzumClient.getAllProducts(storeId, apiKey, uzumShopId).catch((err: any) => {
+        this.logger.warn(`CostRes: product list fetch failed: ${err?.message}`);
+        return [] as any[];
+      }),
       this.prisma.productMeta.findMany({
         where: { storeId, costPrice: { not: null } },
         select: { skuId: true, costPrice: true },
       }),
-      fetchStatus('PROCESSING'),
-      fetchStatus('TO_WITHDRAW'),
     ]);
 
-    // Faol mahsulotlar soni (jonli ro'yxatdan)
-    const activeProducts = allProducts.filter((p: any) => p?.status?.value === 'ACTIVE').length;
+    // Uzum mahsulot statusi "ACTIVE" qiymatini qaytarmaydi (ARCHIVED/RUN_OUT/IN_STOCK/...).
+    // Faol mahsulot = Uzum'ning o'z `isActive` flagi (arxivlanmagan/bloklanmagan, sotuvda).
+    const activeProducts = allProducts.filter(
+      (p: any) => p?.isActive === true || p?.status?.value === 'IN_STOCK' || p?.status?.value === 'READY_TO_SEND',
+    ).length;
 
-    // ── Tan narx resolution maps ──
-    // Finance orderItems'da skuId YO'Q — faqat productId va skuTitle bor.
-    // skuTitle === product.skuFullTitle (Uzum API'da bir xil), shuning uchun
-    // mahsulot ro'yxatidan skuFullTitle → costUsd xaritasini quramiz.
     const costBySkuId = new Map<string, number>();
     for (const m of metas) {
       if (m.costPrice != null) costBySkuId.set(m.skuId, Number(m.costPrice));
     }
-    const costByFullTitle = new Map<string, number>();
+    // Plain objects (not Maps) so the payload serializes to the disk cache.
+    const costByFullTitle: Record<string, number> = {};
     const costsByProductId = new Map<string, Set<number>>();
     for (const p of allProducts) {
       const pid = String(p?.productId ?? '');
@@ -492,19 +470,53 @@ export class FinanceSyncService {
         if (!sid) continue;
         const cp = costBySkuId.get(sid);
         if (cp == null) continue;
-        if (s?.skuFullTitle) costByFullTitle.set(s.skuFullTitle, cp);
-        if (s?.skuTitle) costByFullTitle.set(s.skuTitle, cp); // fallback nomi
+        if (s?.skuFullTitle) costByFullTitle[s.skuFullTitle] = cp;
+        if (s?.skuTitle) costByFullTitle[s.skuTitle] = cp; // fallback nomi
         if (pid) {
           if (!costsByProductId.has(pid)) costsByProductId.set(pid, new Set());
           costsByProductId.get(pid)!.add(cp);
         }
       }
     }
-    // productId fallback — faqat mahsulotning barcha SKU'lari bir xil tan narxda bo'lsa
-    const costByProductId = new Map<string, number>();
+    const costByProductId: Record<string, number> = {};
     for (const [pid, set] of costsByProductId) {
-      if (set.size === 1) costByProductId.set(pid, [...set][0]);
+      if (set.size === 1) costByProductId[pid] = [...set][0];
     }
+
+    return { activeProducts, skusWithCost: costBySkuId.size, costByFullTitle, costByProductId };
+  }
+
+  private async computeDashboardSummary(userId: string, storeId: string, timeRange: string, force?: boolean) {
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const { from, to } = this.resolveRange(timeRange);
+    const fromMs = from.getTime();
+    const toMs = to.getTime();
+
+    // ── Bitta date-filtered finance/orders so'rovi (status filtri YO'Q) ──
+    // /v2/fbs/orders bu do'kon uchun bo'sh; /v1/finance/orders esa sellerProfit,
+    // skuTitle, productId, amount, amountReturns va date (ms) ni qaytaradi.
+    // CANCELED itemlar daromadga kirmaydi. Bitta so'rov = tezroq.
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 40; // up to 20k items
+    const fetchAll = async (): Promise<any[]> => {
+      const out: any[] = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const resp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
+          page, size: PAGE_SIZE, group: false, dateFrom: fromMs, dateTo: toMs,
+        });
+        out.push(...resp.orderItems);
+        if (resp.orderItems.length < PAGE_SIZE || out.length >= resp.total) break;
+      }
+      return out;
+    };
+
+    const [items, cost] = await Promise.all([
+      fetchAll().catch((err: any) => {
+        this.logger.warn(`Dashboard: finance orders fetch failed: ${err?.message}`);
+        return [] as any[];
+      }),
+      this.getCostResolution(userId, storeId, force),
+    ]);
 
     // ── Aggregate: Σ sellerProfit (revenue) + tan narx (USD) sotilgan soni bo'yicha ──
     let revenue = 0;
@@ -514,36 +526,38 @@ export class FinanceSyncService {
     let totalSoldQty = 0;    // jami sotilgan birliklar
     const orderIds = new Set<string | number>();
     const soldTitles = new Set<string>();
-    for (const it of [...procItems, ...wdItems]) {
+    for (const it of items) {
+      // Bekor qilingan buyurtmalar daromadga/sof foydaga kirmaydi.
+      const status = String(it.status || '').toUpperCase();
+      if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED') continue;
+
       revenue += Number(it.sellerProfit || 0);
       financeItems++;
       if (it.orderId != null) orderIds.add(it.orderId);
+
       const qty = Number(it.amount || 0) - Number(it.amountReturns || 0);
       if (qty <= 0) continue;
       totalSoldQty += qty;
       if (it.skuTitle) soldTitles.add(String(it.skuTitle));
       // Tan narxni skuTitle (=skuFullTitle) bo'yicha, bo'lmasa productId bo'yicha topamiz
-      let cp = it.skuTitle != null ? costByFullTitle.get(String(it.skuTitle)) : undefined;
-      if (cp == null && it.productId != null) cp = costByProductId.get(String(it.productId));
+      let cp = it.skuTitle != null ? cost.costByFullTitle[String(it.skuTitle)] : undefined;
+      if (cp == null && it.productId != null) cp = cost.costByProductId[String(it.productId)];
       if (cp != null) {
         costUsd += cp * qty;
         costedQty += qty;
       }
     }
-    // Davrda tushgan buyurtmalar = barcha statusdagi FBS orderlar (jonli, sana filtri).
-    // Agar status-siz so'rov 0 qaytarsa, finance ma'lumotidagi noyob orderId soniga qaytamiz.
-    const orders = fbsOrdersTotal || orderIds.size;
 
     const payload = {
       timeRange,
       dateFrom: fromMs,
       dateTo: toMs,
       revenue,                                   // Jami daromad (sellerProfit only, UZS)
-      orders,                                    // Davrda tushgan buyurtmalar
-      activeProducts,                            // Faol mahsulotlar
+      orders: orderIds.size,                     // Davrda tushgan buyurtmalar (noyob orderId)
+      activeProducts: cost.activeProducts,       // Faol mahsulotlar
       costUsd,                                   // Sotilgan mahsulotlar tan narxi (USD jami)
       coverage: {
-        skusWithCost: costBySkuId.size,          // nechta SKU ga tan narx kiritilgan
+        skusWithCost: cost.skusWithCost,         // nechta SKU ga tan narx kiritilgan
         skusSold: soldTitles.size,               // nechta SKU sotilgan
         costedQty,                               // tan narxi bor sotilgan birliklar
         totalSoldQty,                            // jami sotilgan birliklar

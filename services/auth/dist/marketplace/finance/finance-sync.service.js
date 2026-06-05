@@ -323,64 +323,36 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             key: `dashboard:${storeId}:${timeRange}`,
             ttlMs: this.RECON_CACHE_TTL_MS,
             force: opts.force,
-            producer: () => this.computeDashboardSummary(userId, storeId, timeRange),
+            producer: () => this.computeDashboardSummary(userId, storeId, timeRange, opts.force),
         });
     }
-    async computeDashboardSummary(userId, storeId, timeRange) {
+    getCostResolution(userId, storeId, force) {
+        return this.swr({
+            key: `costres:${storeId}`,
+            ttlMs: this.RECON_CACHE_TTL_MS,
+            force,
+            producer: () => this.computeCostResolution(userId, storeId),
+        });
+    }
+    async computeCostResolution(userId, storeId) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const { from, to } = this.resolveRange(timeRange);
-        const fromMs = from.getTime();
-        const toMs = to.getTime();
-        const PAGE_SIZE = 500;
-        const MAX_PAGES = 20;
-        const fetchStatus = async (status) => {
-            const out = [];
-            try {
-                for (let page = 0; page < MAX_PAGES; page++) {
-                    const resp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
-                        page, size: PAGE_SIZE, statuses: [status], group: false,
-                        dateFrom: fromMs, dateTo: toMs,
-                    });
-                    out.push(...resp.orderItems);
-                    if (resp.orderItems.length < PAGE_SIZE)
-                        break;
-                }
-            }
-            catch (err) {
-                this.logger.warn(`Dashboard: finance orders (${status}) fetch failed: ${err?.message}`);
-            }
-            return out;
-        };
-        const [allProducts, fbsOrdersTotal, metas, procItems, wdItems] = await Promise.all([
-            this.uzumClient
-                .getAllProducts(storeId, apiKey, uzumShopId)
-                .catch((err) => {
-                this.logger.warn(`Dashboard: product list fetch failed: ${err?.message}`);
+        const [allProducts, metas] = await Promise.all([
+            this.uzumClient.getAllProducts(storeId, apiKey, uzumShopId).catch((err) => {
+                this.logger.warn(`CostRes: product list fetch failed: ${err?.message}`);
                 return [];
-            }),
-            this.uzumClient
-                .getOrders(storeId, apiKey, [String(uzumShopId)], {
-                page: 0, size: 1, dateFrom: String(fromMs), dateTo: String(toMs),
-            })
-                .then((r) => r?.total ?? 0)
-                .catch((err) => {
-                this.logger.warn(`Dashboard: fbs orders total failed: ${err?.message}`);
-                return 0;
             }),
             this.prisma.productMeta.findMany({
                 where: { storeId, costPrice: { not: null } },
                 select: { skuId: true, costPrice: true },
             }),
-            fetchStatus('PROCESSING'),
-            fetchStatus('TO_WITHDRAW'),
         ]);
-        const activeProducts = allProducts.filter((p) => p?.status?.value === 'ACTIVE').length;
+        const activeProducts = allProducts.filter((p) => p?.isActive === true || p?.status?.value === 'IN_STOCK' || p?.status?.value === 'READY_TO_SEND').length;
         const costBySkuId = new Map();
         for (const m of metas) {
             if (m.costPrice != null)
                 costBySkuId.set(m.skuId, Number(m.costPrice));
         }
-        const costByFullTitle = new Map();
+        const costByFullTitle = {};
         const costsByProductId = new Map();
         for (const p of allProducts) {
             const pid = String(p?.productId ?? '');
@@ -392,9 +364,9 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
                 if (cp == null)
                     continue;
                 if (s?.skuFullTitle)
-                    costByFullTitle.set(s.skuFullTitle, cp);
+                    costByFullTitle[s.skuFullTitle] = cp;
                 if (s?.skuTitle)
-                    costByFullTitle.set(s.skuTitle, cp);
+                    costByFullTitle[s.skuTitle] = cp;
                 if (pid) {
                     if (!costsByProductId.has(pid))
                         costsByProductId.set(pid, new Set());
@@ -402,11 +374,39 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
                 }
             }
         }
-        const costByProductId = new Map();
+        const costByProductId = {};
         for (const [pid, set] of costsByProductId) {
             if (set.size === 1)
-                costByProductId.set(pid, [...set][0]);
+                costByProductId[pid] = [...set][0];
         }
+        return { activeProducts, skusWithCost: costBySkuId.size, costByFullTitle, costByProductId };
+    }
+    async computeDashboardSummary(userId, storeId, timeRange, force) {
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const { from, to } = this.resolveRange(timeRange);
+        const fromMs = from.getTime();
+        const toMs = to.getTime();
+        const PAGE_SIZE = 500;
+        const MAX_PAGES = 40;
+        const fetchAll = async () => {
+            const out = [];
+            for (let page = 0; page < MAX_PAGES; page++) {
+                const resp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
+                    page, size: PAGE_SIZE, group: false, dateFrom: fromMs, dateTo: toMs,
+                });
+                out.push(...resp.orderItems);
+                if (resp.orderItems.length < PAGE_SIZE || out.length >= resp.total)
+                    break;
+            }
+            return out;
+        };
+        const [items, cost] = await Promise.all([
+            fetchAll().catch((err) => {
+                this.logger.warn(`Dashboard: finance orders fetch failed: ${err?.message}`);
+                return [];
+            }),
+            this.getCostResolution(userId, storeId, force),
+        ]);
         let revenue = 0;
         let financeItems = 0;
         let costUsd = 0;
@@ -414,7 +414,10 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         let totalSoldQty = 0;
         const orderIds = new Set();
         const soldTitles = new Set();
-        for (const it of [...procItems, ...wdItems]) {
+        for (const it of items) {
+            const status = String(it.status || '').toUpperCase();
+            if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED')
+                continue;
             revenue += Number(it.sellerProfit || 0);
             financeItems++;
             if (it.orderId != null)
@@ -425,25 +428,24 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             totalSoldQty += qty;
             if (it.skuTitle)
                 soldTitles.add(String(it.skuTitle));
-            let cp = it.skuTitle != null ? costByFullTitle.get(String(it.skuTitle)) : undefined;
+            let cp = it.skuTitle != null ? cost.costByFullTitle[String(it.skuTitle)] : undefined;
             if (cp == null && it.productId != null)
-                cp = costByProductId.get(String(it.productId));
+                cp = cost.costByProductId[String(it.productId)];
             if (cp != null) {
                 costUsd += cp * qty;
                 costedQty += qty;
             }
         }
-        const orders = fbsOrdersTotal || orderIds.size;
         const payload = {
             timeRange,
             dateFrom: fromMs,
             dateTo: toMs,
             revenue,
-            orders,
-            activeProducts,
+            orders: orderIds.size,
+            activeProducts: cost.activeProducts,
             costUsd,
             coverage: {
-                skusWithCost: costBySkuId.size,
+                skusWithCost: cost.skusWithCost,
                 skusSold: soldTitles.size,
                 costedQty,
                 totalSoldQty,

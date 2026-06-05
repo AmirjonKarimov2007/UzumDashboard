@@ -34,6 +34,8 @@ export declare class FinanceSyncService {
         force?: boolean;
         timeRange?: string;
     }): Promise<any>;
+    private getCostResolution;
+    private computeCostResolution;
     private computeDashboardSummary;
     getReconciliation(userId: string, storeId: string, opts?: {
         dateFrom?: number;
