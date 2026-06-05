@@ -446,6 +446,9 @@ export class FinanceSyncService {
     skusWithCost: number;
     costByFullTitle: Record<string, number>;
     costByProductId: Record<string, number>;
+    titleByProductId: Record<string, string>;
+    categoryByProductId: Record<string, string>;
+    imageByProductId: Record<string, string>;
   }> {
     return this.swr({
       key: `costres:${storeId}`,
@@ -453,6 +456,14 @@ export class FinanceSyncService {
       force,
       producer: () => this.computeCostResolution(userId, storeId),
     });
+  }
+
+  /** Mahsulot rasm URL'ini (kichik) productdan ajratib oladi. */
+  private pickProductImage(p: any): string {
+    const ph = p?.image?.photo || p?.previewImg?.photo || p?.skuList?.[0]?.image?.photo;
+    if (!ph) return '';
+    const sz = ph['240'] || ph['120'] || ph['80'] || ph['480'] || Object.values(ph)[0];
+    return (sz as any)?.high || (sz as any)?.low || '';
   }
 
   private async computeCostResolution(userId: string, storeId: string) {
@@ -481,8 +492,20 @@ export class FinanceSyncService {
     // Plain objects (not Maps) so the payload serializes to the disk cache.
     const costByFullTitle: Record<string, number> = {};
     const costsByProductId = new Map<string, Set<number>>();
+    // Mahsulot metama'lumoti — kategoriya/top mahsulotlar/so'nggi buyurtmalar uchun.
+    const titleByProductId: Record<string, string> = {};
+    const categoryByProductId: Record<string, string> = {};
+    const imageByProductId: Record<string, string> = {};
     for (const p of allProducts) {
       const pid = String(p?.productId ?? '');
+      if (pid) {
+        if (p?.title) titleByProductId[pid] = String(p.title);
+        // category Uzum'da oddiy string ("Organayzerlar...") yoki obyekt bo'lishi mumkin.
+        const cat = typeof p?.category === 'string' ? p.category : (p?.category?.title || p?.category?.name);
+        if (cat) categoryByProductId[pid] = String(cat);
+        const img = this.pickProductImage(p);
+        if (img) imageByProductId[pid] = img;
+      }
       for (const s of p?.skuList || []) {
         const sid = s?.skuId != null ? String(s.skuId) : null;
         if (!sid) continue;
@@ -501,7 +524,15 @@ export class FinanceSyncService {
       if (set.size === 1) costByProductId[pid] = [...set][0];
     }
 
-    return { activeProducts, skusWithCost: costBySkuId.size, costByFullTitle, costByProductId };
+    return {
+      activeProducts,
+      skusWithCost: costBySkuId.size,
+      costByFullTitle,
+      costByProductId,
+      titleByProductId,
+      categoryByProductId,
+      imageByProductId,
+    };
   }
 
   private async computeDashboardSummary(
@@ -550,7 +581,25 @@ export class FinanceSyncService {
       this.getCostResolution(userId, storeId, force),
     ]);
 
-    // ── Aggregate: Σ sellerProfit (revenue) + tan narx (USD) sotilgan soni bo'yicha ──
+    // ── Vidjetlar uchun granulyatsiya (kun/hafta/oy) ──
+    const spanDays = (toMs - fromMs) / 86_400_000;
+    const gran: 'day' | 'week' | 'month' = spanDays <= 45 ? 'day' : spanDays <= 200 ? 'week' : 'month';
+    const MONTHS_UZ = ['Yan', 'Fev', 'Mar', 'Apr', 'May', 'Iyn', 'Iyl', 'Avg', 'Sen', 'Okt', 'Noy', 'Dek'];
+    const pad2 = (n: number) => String(n).padStart(2, '0');
+    const bucketOf = (ms: number): { key: string; label: string; sort: number } => {
+      const d = new Date(ms);
+      if (gran === 'month') {
+        return { key: `${d.getFullYear()}-${d.getMonth()}`, label: `${MONTHS_UZ[d.getMonth()]}`, sort: d.getFullYear() * 12 + d.getMonth() };
+      }
+      if (gran === 'week') {
+        const dd = new Date(d); const wd = (dd.getDay() + 6) % 7; dd.setDate(dd.getDate() - wd); dd.setHours(0, 0, 0, 0);
+        return { key: `w${dd.getTime()}`, label: `${pad2(dd.getDate())}.${pad2(dd.getMonth() + 1)}`, sort: dd.getTime() };
+      }
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      return { key: `d${day.getTime()}`, label: `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`, sort: day.getTime() };
+    };
+
+    // ── Aggregate: revenue + tan narx + vidjetlar ──
     let revenue = 0;
     let financeItems = 0;
     let costUsd = 0;
@@ -558,27 +607,93 @@ export class FinanceSyncService {
     let totalSoldQty = 0;    // jami sotilgan birliklar
     const orderIds = new Set<string | number>();
     const soldTitles = new Set<string>();
+
+    const chartMap = new Map<string, { label: string; sort: number; revenue: number; costUsd: number }>();
+    const catMap = new Map<string, number>();                 // kategoriya → revenue
+    const prodMap = new Map<string, { name: string; revenue: number; qty: number; image: string }>();
+    const orderAgg = new Map<string | number, { orderId: any; name: string; sub: string; total: number; items: number; status: string; date: number }>();
+
     for (const it of items) {
       // Bekor qilingan buyurtmalar daromadga/sof foydaga kirmaydi.
       const status = String(it.status || '').toUpperCase();
       if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED') continue;
 
-      revenue += Number(it.sellerProfit || 0);
+      const profit = Number(it.sellerProfit || 0);
+      revenue += profit;
       financeItems++;
       if (it.orderId != null) orderIds.add(it.orderId);
 
+      const pid = it.productId != null ? String(it.productId) : '';
+      const name = (pid && cost.titleByProductId[pid]) || it.productTitle || it.skuTitle || 'Mahsulot';
       const qty = Number(it.amount || 0) - Number(it.amountReturns || 0);
-      if (qty <= 0) continue;
-      totalSoldQty += qty;
-      if (it.skuTitle) soldTitles.add(String(it.skuTitle));
-      // Tan narxni skuTitle (=skuFullTitle) bo'yicha, bo'lmasa productId bo'yicha topamiz
-      let cp = it.skuTitle != null ? cost.costByFullTitle[String(it.skuTitle)] : undefined;
-      if (cp == null && it.productId != null) cp = cost.costByProductId[String(it.productId)];
-      if (cp != null) {
-        costUsd += cp * qty;
-        costedQty += qty;
+
+      // Daromad dinamikasi (kun/hafta/oy)
+      const dateMs = Number(it.date || it.dateIssued || toMs);
+      const b = bucketOf(dateMs);
+      const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0 };
+      ch.revenue += profit;
+
+      // Kategoriya (daromad bo'yicha)
+      const catName = (pid && cost.categoryByProductId[pid]) || 'Boshqa';
+      catMap.set(catName, (catMap.get(catName) || 0) + profit);
+
+      // Top mahsulotlar (daromad bo'yicha)
+      const prodKey = pid || name;
+      const pm = prodMap.get(prodKey) || { name, revenue: 0, qty: 0, image: (pid && cost.imageByProductId[pid]) || it.productImage?.photo?.['240']?.high || '' };
+      pm.revenue += profit;
+
+      // So'nggi buyurtmalar (orderId bo'yicha to'plash)
+      if (it.orderId != null) {
+        const gross = Number(it.sellPrice || 0) * Math.max(0, qty);
+        const oa = orderAgg.get(it.orderId) || { orderId: it.orderId, name, sub: '', items: 0, total: 0, status: it.status || '', date: dateMs };
+        oa.total += gross > 0 ? gross : profit;
+        oa.items += 1;
+        if (dateMs > oa.date) oa.date = dateMs;
+        if (oa.items === 1) oa.name = name; else oa.sub = `+${oa.items - 1}`;
+        orderAgg.set(it.orderId, oa);
       }
+
+      if (qty > 0) {
+        totalSoldQty += qty;
+        if (it.skuTitle) soldTitles.add(String(it.skuTitle));
+        pm.qty += qty;
+        // Tan narxni skuTitle (=skuFullTitle) bo'yicha, bo'lmasa productId bo'yicha topamiz
+        let cp = it.skuTitle != null ? cost.costByFullTitle[String(it.skuTitle)] : undefined;
+        if (cp == null && it.productId != null) cp = cost.costByProductId[String(it.productId)];
+        if (cp != null) {
+          costUsd += cp * qty;
+          costedQty += qty;
+          ch.costUsd += cp * qty;
+        }
+      }
+
+      chartMap.set(b.key, ch);
+      prodMap.set(prodKey, pm);
     }
+
+    // Chart — sana bo'yicha tartiblangan, { name, revenue, costUsd }
+    const chart = [...chartMap.values()]
+      .sort((a, b) => a.sort - b.sort)
+      .map((c) => ({ name: c.label, revenue: Math.round(c.revenue), costUsd: c.costUsd }));
+
+    // Kategoriyalar — daromad bo'yicha, foiz bilan
+    const catTotal = [...catMap.values()].reduce((s, v) => s + v, 0) || 1;
+    const categories = [...catMap.entries()]
+      .map(([name, rev]) => ({ name, revenue: Math.round(rev), percentage: (rev / catTotal) * 100 }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 6);
+
+    // Top mahsulotlar — daromad bo'yicha, top 5
+    const topProducts = [...prodMap.values()]
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5)
+      .map((p, i) => ({ id: `${i}-${p.name}`, name: p.name, revenue: Math.round(p.revenue), soldCount: p.qty, image: p.image }));
+
+    // So'nggi buyurtmalar — sana bo'yicha kamayish tartibida, oxirgi 6 ta
+    const recentOrders = [...orderAgg.values()]
+      .sort((a, b) => b.date - a.date)
+      .slice(0, 6)
+      .map((o) => ({ id: String(o.orderId), orderId: o.orderId, name: o.name, sub: o.sub, total: Math.round(o.total), status: o.status, date: o.date }));
 
     const payload = {
       timeRange,
@@ -595,6 +710,10 @@ export class FinanceSyncService {
         totalSoldQty,                            // jami sotilgan birliklar
       },
       financeItems,
+      chart,                                     // Daromad dinamikasi
+      categories,                                // Kategoriyalar (daromad bo'yicha)
+      topProducts,                               // Top mahsulotlar
+      recentOrders,                              // So'nggi buyurtmalar
     };
 
     return payload;

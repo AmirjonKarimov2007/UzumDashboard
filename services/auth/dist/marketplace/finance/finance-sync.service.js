@@ -344,6 +344,13 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             producer: () => this.computeCostResolution(userId, storeId),
         });
     }
+    pickProductImage(p) {
+        const ph = p?.image?.photo || p?.previewImg?.photo || p?.skuList?.[0]?.image?.photo;
+        if (!ph)
+            return '';
+        const sz = ph['240'] || ph['120'] || ph['80'] || ph['480'] || Object.values(ph)[0];
+        return sz?.high || sz?.low || '';
+    }
     async computeCostResolution(userId, storeId) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         const [allProducts, metas] = await Promise.all([
@@ -364,8 +371,21 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         }
         const costByFullTitle = {};
         const costsByProductId = new Map();
+        const titleByProductId = {};
+        const categoryByProductId = {};
+        const imageByProductId = {};
         for (const p of allProducts) {
             const pid = String(p?.productId ?? '');
+            if (pid) {
+                if (p?.title)
+                    titleByProductId[pid] = String(p.title);
+                const cat = typeof p?.category === 'string' ? p.category : (p?.category?.title || p?.category?.name);
+                if (cat)
+                    categoryByProductId[pid] = String(cat);
+                const img = this.pickProductImage(p);
+                if (img)
+                    imageByProductId[pid] = img;
+            }
             for (const s of p?.skuList || []) {
                 const sid = s?.skuId != null ? String(s.skuId) : null;
                 if (!sid)
@@ -389,7 +409,15 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             if (set.size === 1)
                 costByProductId[pid] = [...set][0];
         }
-        return { activeProducts, skusWithCost: costBySkuId.size, costByFullTitle, costByProductId };
+        return {
+            activeProducts,
+            skusWithCost: costBySkuId.size,
+            costByFullTitle,
+            costByProductId,
+            titleByProductId,
+            categoryByProductId,
+            imageByProductId,
+        };
     }
     async computeDashboardSummary(userId, storeId, timeRange, force, custom) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
@@ -425,6 +453,25 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             }),
             this.getCostResolution(userId, storeId, force),
         ]);
+        const spanDays = (toMs - fromMs) / 86_400_000;
+        const gran = spanDays <= 45 ? 'day' : spanDays <= 200 ? 'week' : 'month';
+        const MONTHS_UZ = ['Yan', 'Fev', 'Mar', 'Apr', 'May', 'Iyn', 'Iyl', 'Avg', 'Sen', 'Okt', 'Noy', 'Dek'];
+        const pad2 = (n) => String(n).padStart(2, '0');
+        const bucketOf = (ms) => {
+            const d = new Date(ms);
+            if (gran === 'month') {
+                return { key: `${d.getFullYear()}-${d.getMonth()}`, label: `${MONTHS_UZ[d.getMonth()]}`, sort: d.getFullYear() * 12 + d.getMonth() };
+            }
+            if (gran === 'week') {
+                const dd = new Date(d);
+                const wd = (dd.getDay() + 6) % 7;
+                dd.setDate(dd.getDate() - wd);
+                dd.setHours(0, 0, 0, 0);
+                return { key: `w${dd.getTime()}`, label: `${pad2(dd.getDate())}.${pad2(dd.getMonth() + 1)}`, sort: dd.getTime() };
+            }
+            const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            return { key: `d${day.getTime()}`, label: `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`, sort: day.getTime() };
+        };
         let revenue = 0;
         let financeItems = 0;
         let costUsd = 0;
@@ -432,28 +479,77 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         let totalSoldQty = 0;
         const orderIds = new Set();
         const soldTitles = new Set();
+        const chartMap = new Map();
+        const catMap = new Map();
+        const prodMap = new Map();
+        const orderAgg = new Map();
         for (const it of items) {
             const status = String(it.status || '').toUpperCase();
             if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED')
                 continue;
-            revenue += Number(it.sellerProfit || 0);
+            const profit = Number(it.sellerProfit || 0);
+            revenue += profit;
             financeItems++;
             if (it.orderId != null)
                 orderIds.add(it.orderId);
+            const pid = it.productId != null ? String(it.productId) : '';
+            const name = (pid && cost.titleByProductId[pid]) || it.productTitle || it.skuTitle || 'Mahsulot';
             const qty = Number(it.amount || 0) - Number(it.amountReturns || 0);
-            if (qty <= 0)
-                continue;
-            totalSoldQty += qty;
-            if (it.skuTitle)
-                soldTitles.add(String(it.skuTitle));
-            let cp = it.skuTitle != null ? cost.costByFullTitle[String(it.skuTitle)] : undefined;
-            if (cp == null && it.productId != null)
-                cp = cost.costByProductId[String(it.productId)];
-            if (cp != null) {
-                costUsd += cp * qty;
-                costedQty += qty;
+            const dateMs = Number(it.date || it.dateIssued || toMs);
+            const b = bucketOf(dateMs);
+            const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0 };
+            ch.revenue += profit;
+            const catName = (pid && cost.categoryByProductId[pid]) || 'Boshqa';
+            catMap.set(catName, (catMap.get(catName) || 0) + profit);
+            const prodKey = pid || name;
+            const pm = prodMap.get(prodKey) || { name, revenue: 0, qty: 0, image: (pid && cost.imageByProductId[pid]) || it.productImage?.photo?.['240']?.high || '' };
+            pm.revenue += profit;
+            if (it.orderId != null) {
+                const gross = Number(it.sellPrice || 0) * Math.max(0, qty);
+                const oa = orderAgg.get(it.orderId) || { orderId: it.orderId, name, sub: '', items: 0, total: 0, status: it.status || '', date: dateMs };
+                oa.total += gross > 0 ? gross : profit;
+                oa.items += 1;
+                if (dateMs > oa.date)
+                    oa.date = dateMs;
+                if (oa.items === 1)
+                    oa.name = name;
+                else
+                    oa.sub = `+${oa.items - 1}`;
+                orderAgg.set(it.orderId, oa);
             }
+            if (qty > 0) {
+                totalSoldQty += qty;
+                if (it.skuTitle)
+                    soldTitles.add(String(it.skuTitle));
+                pm.qty += qty;
+                let cp = it.skuTitle != null ? cost.costByFullTitle[String(it.skuTitle)] : undefined;
+                if (cp == null && it.productId != null)
+                    cp = cost.costByProductId[String(it.productId)];
+                if (cp != null) {
+                    costUsd += cp * qty;
+                    costedQty += qty;
+                    ch.costUsd += cp * qty;
+                }
+            }
+            chartMap.set(b.key, ch);
+            prodMap.set(prodKey, pm);
         }
+        const chart = [...chartMap.values()]
+            .sort((a, b) => a.sort - b.sort)
+            .map((c) => ({ name: c.label, revenue: Math.round(c.revenue), costUsd: c.costUsd }));
+        const catTotal = [...catMap.values()].reduce((s, v) => s + v, 0) || 1;
+        const categories = [...catMap.entries()]
+            .map(([name, rev]) => ({ name, revenue: Math.round(rev), percentage: (rev / catTotal) * 100 }))
+            .sort((a, b) => b.revenue - a.revenue)
+            .slice(0, 6);
+        const topProducts = [...prodMap.values()]
+            .sort((a, b) => b.revenue - a.revenue)
+            .slice(0, 5)
+            .map((p, i) => ({ id: `${i}-${p.name}`, name: p.name, revenue: Math.round(p.revenue), soldCount: p.qty, image: p.image }));
+        const recentOrders = [...orderAgg.values()]
+            .sort((a, b) => b.date - a.date)
+            .slice(0, 6)
+            .map((o) => ({ id: String(o.orderId), orderId: o.orderId, name: o.name, sub: o.sub, total: Math.round(o.total), status: o.status, date: o.date }));
         const payload = {
             timeRange,
             dateFrom: fromMs,
@@ -469,6 +565,10 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
                 totalSoldQty,
             },
             financeItems,
+            chart,
+            categories,
+            topProducts,
+            recentOrders,
         };
         return payload;
     }

@@ -41,8 +41,12 @@ export declare class FinanceSyncService {
         skusWithCost: number;
         costByFullTitle: Record<string, number>;
         costByProductId: Record<string, number>;
+        titleByProductId: Record<string, string>;
+        categoryByProductId: Record<string, string>;
+        imageByProductId: Record<string, string>;
     }>;
     private getCostResolution;
+    private pickProductImage;
     private computeCostResolution;
     private computeDashboardSummary;
     getReconciliation(userId: string, storeId: string, opts?: {
