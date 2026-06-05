@@ -12,12 +12,13 @@ const fbs_controller_1 = require("./fbs.controller");
 const fbs_service_1 = require("./fbs.service");
 const uzum_module_1 = require("../../uzum/uzum.module");
 const stores_module_1 = require("../stores/stores.module");
+const finance_module_1 = require("../finance/finance.module");
 let FbsModule = class FbsModule {
 };
 exports.FbsModule = FbsModule;
 exports.FbsModule = FbsModule = __decorate([
     (0, common_1.Module)({
-        imports: [uzum_module_1.UzumModule, stores_module_1.StoresModule],
+        imports: [uzum_module_1.UzumModule, stores_module_1.StoresModule, finance_module_1.FinanceModule],
         controllers: [fbs_controller_1.FbsController],
         providers: [fbs_service_1.FbsService],
         exports: [fbs_service_1.FbsService],

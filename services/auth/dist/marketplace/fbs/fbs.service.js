@@ -14,10 +14,12 @@ exports.FbsService = void 0;
 const common_1 = require("@nestjs/common");
 const uzum_api_client_1 = require("../../uzum/client/uzum-api.client");
 const stores_service_1 = require("../stores/stores.service");
+const finance_sync_service_1 = require("../finance/finance-sync.service");
 let FbsService = FbsService_1 = class FbsService {
-    constructor(uzumClient, storesService) {
+    constructor(uzumClient, storesService, financeSync) {
         this.uzumClient = uzumClient;
         this.storesService = storesService;
+        this.financeSync = financeSync;
         this.logger = new common_1.Logger(FbsService_1.name);
         this.countsCache = new Map();
         this.productsCache = new Map();
@@ -122,6 +124,23 @@ let FbsService = FbsService_1 = class FbsService {
     async getInvoiceOrders(userId, storeId, invoiceId) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         const orders = await this.uzumClient.getFbsInvoiceOrders(storeId, apiKey, invoiceId);
+        try {
+            const cost = await this.financeSync.resolveCosts(userId, storeId);
+            const byTitle = cost?.costByFullTitle || {};
+            const byPid = cost?.costByProductId || {};
+            for (const o of orders || []) {
+                const items = o?.items || o?.orderItems || [];
+                for (const it of items) {
+                    let cp = it?.skuTitle != null ? byTitle[String(it.skuTitle)] : undefined;
+                    if (cp == null && it?.productId != null)
+                        cp = byPid[String(it.productId)];
+                    it.costUsd = cp != null ? cp : null;
+                }
+            }
+        }
+        catch (err) {
+            this.logger.warn(`Invoice cost enrichment failed: ${err?.message}`);
+        }
         return { orders };
     }
     async getLiveStocks(userId, storeId) {
@@ -219,6 +238,7 @@ exports.FbsService = FbsService;
 exports.FbsService = FbsService = FbsService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [uzum_api_client_1.UzumApiClient,
-        stores_service_1.StoresService])
+        stores_service_1.StoresService,
+        finance_sync_service_1.FinanceSyncService])
 ], FbsService);
 //# sourceMappingURL=fbs.service.js.map

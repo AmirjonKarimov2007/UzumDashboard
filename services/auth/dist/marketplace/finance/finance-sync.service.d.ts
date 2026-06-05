@@ -36,6 +36,12 @@ export declare class FinanceSyncService {
         dateFrom?: number;
         dateTo?: number;
     }): Promise<any>;
+    resolveCosts(userId: string, storeId: string, force?: boolean): Promise<{
+        activeProducts: number;
+        skusWithCost: number;
+        costByFullTitle: Record<string, number>;
+        costByProductId: Record<string, number>;
+    }>;
     private getCostResolution;
     private computeCostResolution;
     private computeDashboardSummary;

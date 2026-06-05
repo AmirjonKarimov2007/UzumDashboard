@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { UzumApiClient } from '../../uzum/client/uzum-api.client';
 import { StoresService } from '../stores/stores.service';
+import { FinanceSyncService } from '../finance/finance-sync.service';
 
 @Injectable()
 export class FbsService {
@@ -15,6 +16,7 @@ export class FbsService {
   constructor(
     private readonly uzumClient: UzumApiClient,
     private readonly storesService: StoresService,
+    private readonly financeSync: FinanceSyncService,
   ) {}
 
   async getOrders(
@@ -188,6 +190,26 @@ export class FbsService {
   async getInvoiceOrders(userId: string, storeId: string, invoiceId: number | string) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
     const orders = await this.uzumClient.getFbsInvoiceOrders(storeId, apiKey, invoiceId);
+
+    // Har bir mahsulot qatorini tan narx (USD) bilan boyitamiz — dashboard bilan
+    // bir xil manba (skuTitle/productId → costUsd, SWR keshlangan). Frontend
+    // shu asosda tan narxlar yig'indisini ko'rsatadi.
+    try {
+      const cost = await this.financeSync.resolveCosts(userId, storeId);
+      const byTitle: Record<string, number> = cost?.costByFullTitle || {};
+      const byPid: Record<string, number> = cost?.costByProductId || {};
+      for (const o of orders || []) {
+        const items = o?.items || o?.orderItems || [];
+        for (const it of items) {
+          let cp = it?.skuTitle != null ? byTitle[String(it.skuTitle)] : undefined;
+          if (cp == null && it?.productId != null) cp = byPid[String(it.productId)];
+          it.costUsd = cp != null ? cp : null;
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Invoice cost enrichment failed: ${err?.message}`);
+    }
+
     return { orders };
   }
 

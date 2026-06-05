@@ -432,6 +432,15 @@ export class FinanceSyncService {
   // Finance orderItems'da skuId YO'Q — faqat productId va skuTitle bor.
   // skuTitle === product.skuFullTitle, shuning uchun skuFullTitle → costUsd
   // (va productId → costUsd, agar mahsulotning barcha SKU'lari bir xil narxda) quramiz.
+  /**
+   * Public: skuTitle/productId → costUsd xaritasini qaytaradi (dashboard bilan
+   * bir xil manba, SWR keshlangan). Boshqa modullar (FBS ta'minlash) tan narx
+   * yig'indisini hisoblash uchun ishlatadi.
+   */
+  resolveCosts(userId: string, storeId: string, force?: boolean) {
+    return this.getCostResolution(userId, storeId, force);
+  }
+
   private getCostResolution(userId: string, storeId: string, force?: boolean): Promise<{
     activeProducts: number;
     skusWithCost: number;

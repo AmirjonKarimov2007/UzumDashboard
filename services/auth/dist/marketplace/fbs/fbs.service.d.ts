@@ -1,14 +1,16 @@
 import { UzumApiClient } from '../../uzum/client/uzum-api.client';
 import { StoresService } from '../stores/stores.service';
+import { FinanceSyncService } from '../finance/finance-sync.service';
 export declare class FbsService {
     private readonly uzumClient;
     private readonly storesService;
+    private readonly financeSync;
     private readonly logger;
     private countsCache;
     private productsCache;
     private productsInflight;
     private readonly PRODUCTS_TTL_MS;
-    constructor(uzumClient: UzumApiClient, storesService: StoresService);
+    constructor(uzumClient: UzumApiClient, storesService: StoresService, financeSync: FinanceSyncService);
     getOrders(userId: string, storeId: string, status?: string, page?: number, size?: number, extra?: {
         scheme?: 'FBS' | 'DBS';
         dateFrom?: number;

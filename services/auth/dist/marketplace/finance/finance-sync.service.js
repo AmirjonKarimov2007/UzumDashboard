@@ -333,6 +333,9 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             }),
         });
     }
+    resolveCosts(userId, storeId, force) {
+        return this.getCostResolution(userId, storeId, force);
+    }
     getCostResolution(userId, storeId, force) {
         return this.swr({
             key: `costres:${storeId}`,
