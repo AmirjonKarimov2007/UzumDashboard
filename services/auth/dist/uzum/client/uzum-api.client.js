@@ -343,6 +343,13 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         const { skuAmountList } = await this.getStocks(storeId, apiKey, shopId);
         return skuAmountList;
     }
+    async setStocks(storeId, apiKey, items) {
+        const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/sku/stocks', 'POST', (client) => client.post('/v2/fbs/sku/stocks', { skuAmountList: items }));
+        return {
+            totalRecords: data?.payload?.totalRecords ?? 0,
+            updatedRecords: data?.payload?.updatedRecords ?? 0,
+        };
+    }
     async getFbsOrders(storeId, apiKey, shopId, status = 'PACKING', page = 0, size = 50, extra = {}) {
         const params = { shopIds: shopId, status, page, size };
         if (extra.scheme)

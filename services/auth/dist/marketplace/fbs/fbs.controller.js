@@ -15,6 +15,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.FbsController = void 0;
 const common_1 = require("@nestjs/common");
 const class_validator_1 = require("class-validator");
+const class_transformer_1 = require("class-transformer");
 const jwt_auth_guard_1 = require("../../common/guards/jwt-auth.guard");
 const current_user_decorator_1 = require("../../common/decorators/current-user.decorator");
 const fbs_service_1 = require("./fbs.service");
@@ -29,6 +30,24 @@ __decorate([
     (0, class_validator_1.IsIn)(['LARGE', 'SMALL']),
     __metadata("design:type", String)
 ], BatchLabelsDto.prototype, "size", void 0);
+class StockUpdateItem {
+}
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], StockUpdateItem.prototype, "skuId", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], StockUpdateItem.prototype, "amount", void 0);
+class SetStocksDto {
+}
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ValidateNested)({ each: true }),
+    (0, class_transformer_1.Type)(() => StockUpdateItem),
+    __metadata("design:type", Array)
+], SetStocksDto.prototype, "updates", void 0);
 let FbsController = class FbsController {
     constructor(fbsService) {
         this.fbsService = fbsService;
@@ -60,14 +79,20 @@ let FbsController = class FbsController {
     getInvoiceOrders(userId, storeId, invoiceId) {
         return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
     }
+    getProductAnalytics(userId, storeId, force) {
+        return this.fbsService.getProductAnalytics(userId, storeId, force === '1' || force === 'true');
+    }
     getLiveProducts(userId, storeId, page, size, filter, searchQuery, sortBy, order) {
         return this.fbsService.getLiveProducts(userId, storeId, page, size, filter, searchQuery, sortBy, order);
     }
     getLiveFinanceOrders(userId, storeId, page, size, dateFrom, dateTo) {
         return this.fbsService.getLiveFinanceOrders(userId, storeId, page, size, dateFrom ? parseInt(dateFrom, 10) : undefined, dateTo ? parseInt(dateTo, 10) : undefined);
     }
-    getLiveStocks(userId, storeId) {
-        return this.fbsService.getLiveStocks(userId, storeId);
+    getLiveStocks(userId, storeId, force) {
+        return this.fbsService.getLiveStocks(userId, storeId, force === '1' || force === 'true');
+    }
+    setStocks(userId, storeId, dto) {
+        return this.fbsService.setStocks(userId, storeId, dto.updates);
     }
     async getLabel(userId, storeId, orderId, size, res) {
         const buffer = await this.fbsService.getLabelPdf(userId, storeId, orderId, size);
@@ -158,6 +183,15 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getInvoiceOrders", null);
 __decorate([
+    (0, common_1.Get)('products/analytics'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('force')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getProductAnalytics", null);
+__decorate([
     (0, common_1.Get)('products'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
     __param(1, (0, common_1.Param)('storeId')),
@@ -187,10 +221,20 @@ __decorate([
     (0, common_1.Get)('stocks'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
     __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('force')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getLiveStocks", null);
+__decorate([
+    (0, common_1.Post)('stocks'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, SetStocksDto]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "setStocks", null);
 __decorate([
     (0, common_1.Get)('orders/:orderId/label'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),

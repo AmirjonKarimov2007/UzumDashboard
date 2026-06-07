@@ -12,7 +12,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { IsArray, IsIn, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { FbsService } from './fbs.service';
@@ -24,6 +25,21 @@ class BatchLabelsDto {
   @IsOptional()
   @IsIn(['LARGE', 'SMALL'])
   size?: 'LARGE' | 'SMALL';
+}
+
+class StockUpdateItem {
+  @IsNumber()
+  skuId!: number;
+
+  @IsNumber()
+  amount!: number;
+}
+
+class SetStocksDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => StockUpdateItem)
+  updates!: StockUpdateItem[];
 }
 
 @Controller('marketplace/stores/:storeId/fbs')
@@ -118,6 +134,16 @@ export class FbsController {
     return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
   }
 
+  /** Full product-level analytics (aggregated, cached 5 min) */
+  @Get('products/analytics')
+  getProductAnalytics(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('force') force?: string,
+  ) {
+    return this.fbsService.getProductAnalytics(userId, storeId, force === '1' || force === 'true');
+  }
+
   /** Live products from Uzum — bypasses sync, fetches directly */
   @Get('products')
   getLiveProducts(
@@ -150,10 +176,24 @@ export class FbsController {
     );
   }
 
-  /** Live FBS SKU stocks from Uzum */
+  /** Live FBS SKU stocks from Uzum (enriched with product info) */
   @Get('stocks')
-  getLiveStocks(@CurrentUser('id') userId: string, @Param('storeId') storeId: string) {
-    return this.fbsService.getLiveStocks(userId, storeId);
+  getLiveStocks(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('force') force?: string,
+  ) {
+    return this.fbsService.getLiveStocks(userId, storeId, force === '1' || force === 'true');
+  }
+
+  /** Update FBS SKU stock amounts (partial — only listed SKUs change) */
+  @Post('stocks')
+  setStocks(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: SetStocksDto,
+  ) {
+    return this.fbsService.setStocks(userId, storeId, dto.updates);
   }
 
   /** Single PDF label — streams the PDF directly to client */

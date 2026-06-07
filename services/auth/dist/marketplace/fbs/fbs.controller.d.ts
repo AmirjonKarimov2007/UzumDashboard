@@ -4,6 +4,13 @@ declare class BatchLabelsDto {
     orderIds: (number | string)[];
     size?: 'LARGE' | 'SMALL';
 }
+declare class StockUpdateItem {
+    skuId: number;
+    amount: number;
+}
+declare class SetStocksDto {
+    updates: StockUpdateItem[];
+}
 export declare class FbsController {
     private readonly fbsService;
     constructor(fbsService: FbsService);
@@ -28,6 +35,7 @@ export declare class FbsController {
     getInvoiceOrders(userId: string, storeId: string, invoiceId: string): Promise<{
         orders: any[];
     }>;
+    getProductAnalytics(userId: string, storeId: string, force?: string): Promise<any>;
     getLiveProducts(userId: string, storeId: string, page: number, size: number, filter?: string, searchQuery?: string, sortBy?: string, order?: 'asc' | 'desc'): Promise<any>;
     getLiveFinanceOrders(userId: string, storeId: string, page: number, size: number, dateFrom?: string, dateTo?: string): Promise<{
         orderItems: any[];
@@ -35,9 +43,36 @@ export declare class FbsController {
         page: number;
         size: number;
     }>;
-    getLiveStocks(userId: string, storeId: string): Promise<{
-        stocks: any[];
+    getLiveStocks(userId: string, storeId: string, force?: string): Promise<{
+        stocks: {
+            skuId: any;
+            skuTitle: any;
+            productTitle: any;
+            barcode: any;
+            amount: any;
+            fbsLinked: any;
+            fbsAllowed: any;
+            dbsLinked: any;
+            dbsAllowed: any;
+            sellerSkuCode: any;
+            image: any;
+            productId: any;
+            price: any;
+            purchasePrice: any;
+            sold: any;
+            category: any;
+            article: any;
+        }[];
         total: number;
+        totalUnits: any;
+        totalValue: number;
+        inStock: number;
+        outOfStock: number;
+    }>;
+    setStocks(userId: string, storeId: string, dto: SetStocksDto): Promise<{
+        totalRecords: number;
+        updatedRecords: number;
+        skipped: number[];
     }>;
     getLabel(userId: string, storeId: string, orderId: string, size: 'LARGE' | 'SMALL', res: Response): Promise<void>;
     getBatchLabels(userId: string, storeId: string, dto: BatchLabelsDto): Promise<{

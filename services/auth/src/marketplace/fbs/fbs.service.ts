@@ -12,6 +12,9 @@ export class FbsService {
   private productsCache = new Map<string, { fetchedAt: number; payload: any }>();
   private productsInflight = new Map<string, Promise<any>>();
   private readonly PRODUCTS_TTL_MS = 2 * 60 * 1000;
+  // Mahsulotlar analitikasi keshi (5 daqiqa) — barcha mahsulotlarni tortib agregatlaydi
+  private productAnalyticsCache = new Map<string, { fetchedAt: number; payload: any }>();
+  private readonly PRODUCT_ANALYTICS_TTL_MS = 5 * 60 * 1000;
 
   constructor(
     private readonly uzumClient: UzumApiClient,
@@ -213,10 +216,286 @@ export class FbsService {
     return { orders };
   }
 
-  async getLiveStocks(userId: string, storeId: string) {
+  // ─── FBS qoldiqlari (Inventar) ───────────────────────────────────────
+  // Mahsulot katalogi (skuId → rasm/narx/tan narx/sotuv) keshi. Qoldiqlar
+  // ro'yxatini boyitishda ishlatiladi; har safar qayta tortmaslik uchun 5 daqiqa.
+  private stockMetaCache = new Map<string, { fetchedAt: number; map: Map<number, any> }>();
+  private readonly STOCK_META_TTL_MS = 5 * 60 * 1000;
+
+  private pickStockImage(sku: any, product: any): string | undefined {
+    // Uzum ba'zan "bare" rasm URL beradi: https://images.uzum.uz/{id} — bunda
+    // transform yo'qligi sababli rasm ochilmaydi. Bunday holatda standart
+    // transform qo'shamiz. To'liq URL (.../t_product_*.jpg) bo'lsa, o'zini qaytaramiz.
+    const normalize = (url?: string): string | undefined => {
+      if (!url || typeof url !== 'string') return undefined;
+      if (/^https?:\/\/images\.uzum\.uz\/[^/]+$/.test(url)) {
+        return `${url}/t_product_540_high.jpg`;
+      }
+      return url;
+    };
+    const fromPhoto = (ph: any): string | undefined => {
+      if (!ph) return undefined;
+      if (typeof ph === 'string') return normalize(ph);
+      const obj = ph.photo || ph;
+      if (typeof obj === 'string') return normalize(obj);
+      for (const size of ['480', '540', '240', '800', '160']) {
+        if (obj?.[size]?.high) return normalize(obj[size].high);
+        if (obj?.[size]?.low) return normalize(obj[size].low);
+      }
+      return undefined;
+    };
+    // Variant (sku) rasmini afzal ko'ramiz, keyin mahsulot rasmiga qaytamiz.
+    return (
+      fromPhoto(sku?.previewImage) ||
+      fromPhoto(sku?.photo) ||
+      fromPhoto(product?.image) ||
+      fromPhoto(product?.previewImg)
+    );
+  }
+
+  /** skuId → {image, productId, price, purchasePrice, sold, category, productTitle, article}. Cached 5 min. */
+  private async getStockMeta(userId: string, storeId: string, force = false): Promise<Map<number, any>> {
+    const cached = this.stockMetaCache.get(storeId);
+    if (!force && cached && Date.now() - cached.fetchedAt < this.STOCK_META_TTL_MS) {
+      return cached.map;
+    }
+    const map = new Map<number, any>();
+    try {
+      const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+      const client = (this.uzumClient as any).buildClient(apiKey);
+      const size = 50;
+      let page = 0;
+      let total = Infinity;
+      while (page * size < total && page < 40) {
+        const res = await client.get(`/v1/product/shop/${uzumShopId}`, {
+          params: { page, size, filter: 'ALL', sortBy: 'DEFAULT', order: 'DESC' },
+        });
+        const payload = res.data?.payload || res.data || {};
+        const products = payload.productList || [];
+        total = payload.totalProductsAmount ?? products.length;
+        if (!products.length) break;
+        for (const p of products) {
+          const category = typeof p?.category === 'string' ? p.category : p?.category?.title || p?.category?.name || '';
+          for (const sku of p?.skuList || []) {
+            map.set(sku.skuId, {
+              image: this.pickStockImage(sku, p),
+              productId: p.productId,
+              price: Number(sku.price) || 0,
+              purchasePrice: Number(sku.purchasePrice) || 0,
+              sold: Number(sku.quantitySold) || 0,
+              category,
+              productTitle: sku.productTitle || p.title || '',
+              article: sku.article || '',
+              skuFullTitle: sku.skuFullTitle || sku.skuTitle || '',
+            });
+          }
+        }
+        page++;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      this.stockMetaCache.set(storeId, { fetchedAt: Date.now(), map });
+    } catch (err: any) {
+      this.logger.warn(`Stock meta enrichment failed: ${err?.message}`);
+      if (cached) return cached.map; // stale ma'lumot bo'lsa, undan foydalanamiz
+    }
+    return map;
+  }
+
+  async getLiveStocks(userId: string, storeId: string, force = false) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
     const { skuAmountList } = await this.uzumClient.getStocks(storeId, apiKey);
-    return { stocks: skuAmountList, total: skuAmountList.length };
+    const meta = await this.getStockMeta(userId, storeId, force);
+
+    const stocks = (skuAmountList || []).map((s: any) => {
+      const m = meta.get(s.skuId) || {};
+      return {
+        skuId: s.skuId,
+        skuTitle: s.skuTitle,
+        productTitle: s.productTitle || m.productTitle || '',
+        barcode: s.barcode,
+        amount: s.amount ?? 0,
+        fbsLinked: s.fbsLinked ?? false,
+        fbsAllowed: s.fbsAllowed ?? false,
+        dbsLinked: s.dbsLinked ?? false,
+        dbsAllowed: s.dbsAllowed ?? false,
+        sellerSkuCode: s.sellerSkuCode ?? null,
+        // boyitilgan ma'lumotlar
+        image: m.image || null,
+        productId: m.productId ?? null,
+        price: m.price ?? 0,
+        purchasePrice: m.purchasePrice ?? 0,
+        sold: m.sold ?? 0,
+        category: m.category || '',
+        article: m.article || '',
+      };
+    });
+
+    const totalUnits = stocks.reduce((sum: number, x: any) => sum + (x.amount || 0), 0);
+    const totalValue = stocks.reduce((sum: number, x: any) => sum + (x.amount || 0) * (x.price || 0), 0);
+    return {
+      stocks,
+      total: stocks.length,
+      totalUnits,
+      totalValue,
+      inStock: stocks.filter((x: any) => x.amount > 0).length,
+      outOfStock: stocks.filter((x: any) => x.amount === 0).length,
+    };
+  }
+
+  /**
+   * Qoldiqlarni yangilaydi. Faqat berilgan SKUlar o'zgaradi (partial update).
+   * Har bir SKU uchun joriy barcode + flaglar saqlanadi va fbsLinked=true
+   * o'rnatiladi (aks holda Uzum SKU'ni FBS'dan uzib, qoldiqni 0 qiladi).
+   */
+  async setStocks(
+    userId: string,
+    storeId: string,
+    updates: Array<{ skuId: number; amount: number }>,
+  ) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const { skuAmountList } = await this.uzumClient.getStocks(storeId, apiKey);
+    const current = new Map<number, any>((skuAmountList || []).map((s: any) => [s.skuId, s]));
+
+    const items = [];
+    const skipped: number[] = [];
+    for (const u of updates) {
+      const cur = current.get(Number(u.skuId));
+      if (!cur) { skipped.push(u.skuId); continue; }
+      const amount = Math.max(0, Math.floor(Number(u.amount) || 0));
+      items.push({
+        skuId: cur.skuId,
+        barcode: String(cur.barcode),
+        amount,
+        fbsLinked: true,
+        fbsAllowed: cur.fbsAllowed ?? true,
+        dbsLinked: cur.dbsLinked ?? false,
+        dbsAllowed: cur.dbsAllowed ?? false,
+      });
+    }
+    if (items.length === 0) {
+      return { totalRecords: 0, updatedRecords: 0, skipped };
+    }
+    const result = await this.uzumClient.setStocks(storeId, apiKey, items);
+    return { ...result, skipped };
+  }
+
+  /**
+   * Mahsulotlar bo'yicha to'liq analitika — barcha mahsulotlarni Uzum'dan tortib
+   * agregatlaydi (umumiy ko'rsatkichlar) va har bir mahsulot uchun qatorlar
+   * qaytaradi. Og'ir so'rov (sahifalab tortadi), shuning uchun 5 daqiqa keshlanadi.
+   */
+  async getProductAnalytics(userId: string, storeId: string, force = false) {
+    const cached = this.productAnalyticsCache.get(storeId);
+    if (!force && cached && Date.now() - cached.fetchedAt < this.PRODUCT_ANALYTICS_TTL_MS) {
+      return cached.payload;
+    }
+
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const products = await this.uzumClient.getAllProducts(storeId, apiKey, uzumShopId);
+
+    const num = (v: any): number => {
+      const n = typeof v === 'string' ? parseFloat(v) : Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const normalizeImage = (url?: string): string | null => {
+      if (!url || typeof url !== 'string') return null;
+      if (/^https?:\/\/images\.uzum\.uz\/[^/]+$/.test(url)) return `${url}/t_product_540_high.jpg`;
+      return url;
+    };
+
+    let totalViewers = 0, totalSold = 0, totalReturned = 0, totalFeedback = 0;
+    let inventoryUnits = 0, inventoryValue = 0, turnover = 0;
+    let ratingSum = 0, ratingCount = 0, activeCount = 0, inStockCount = 0;
+    const rankDist: Record<string, number> = {};
+    const catMap = new Map<string, { count: number; sold: number; turnover: number }>();
+
+    const rows = products.map((p: any) => {
+      const viewers = num(p.viewers);
+      const sold = num(p.quantitySold);
+      const returned = num(p.quantityReturned);
+      // FBS sotuvchida qoldiq quantityFbs da turadi (quantityActive ko'pincha 0).
+      const stock = num(p.quantityFbs) || num(p.quantityActive) || num(p.quantityAvailable);
+      const price = num(p.price);
+      const rating = num(p.rating);
+      const feedback = num(p.feedbackQuantity);
+      const conversion = num(p.conversion);
+      const returnedPct = num(p.returnedPercentage);
+      const rowTurnover = price * sold;
+      const statusValue = p?.status?.value || '';
+      const statusTitle = p?.status?.title || '';
+      const rank = p?.rankInfo?.rank || 'N';
+      const category = (typeof p.category === 'string' && p.category) || p?.category?.title || 'Boshqa';
+      const skuCount = Array.isArray(p.skuList) ? p.skuList.length : 0;
+      // Sotuvdan sotib olishgacha bo'lgan konversiya (ko'rishlardan sotuvga)
+      const viewToSale = viewers > 0 ? (sold / viewers) * 100 : 0;
+
+      totalViewers += viewers;
+      totalSold += sold;
+      totalReturned += returned;
+      totalFeedback += feedback;
+      inventoryUnits += stock;
+      inventoryValue += price * stock;
+      turnover += rowTurnover;
+      if (rating > 0) { ratingSum += rating; ratingCount++; }
+      if (statusValue !== 'ARCHIVED') activeCount++;
+      if (stock > 0) inStockCount++;
+      rankDist[rank] = (rankDist[rank] || 0) + 1;
+      const cm = catMap.get(category) || { count: 0, sold: 0, turnover: 0 };
+      cm.count++; cm.sold += sold; cm.turnover += rowTurnover;
+      catMap.set(category, cm);
+
+      return {
+        productId: p.productId,
+        title: p.title || '',
+        image: normalizeImage(p.image) || normalizeImage(p.previewImg),
+        category,
+        price,
+        sold,
+        returned,
+        returnedPct,
+        stock,
+        viewers,
+        conversion,
+        viewToSale,
+        rating,
+        feedback,
+        roi: num(p.roi),
+        rank,
+        skuCount,
+        turnover: rowTurnover,
+        statusValue,
+        statusTitle,
+      };
+    });
+
+    const categories = [...catMap.entries()]
+      .map(([name, v]) => ({ name, ...v }))
+      .sort((a, b) => b.turnover - a.turnover);
+
+    const payload = {
+      totals: {
+        products: products.length,
+        active: activeCount,
+        inStock: inStockCount,
+        totalViewers,
+        totalSold,
+        totalReturned,
+        totalFeedback,
+        avgRating: ratingCount > 0 ? ratingSum / ratingCount : 0,
+        avgViewToSale: totalViewers > 0 ? (totalSold / totalViewers) * 100 : 0,
+        returnRate: totalSold > 0 ? (totalReturned / totalSold) * 100 : 0,
+        inventoryUnits,
+        inventoryValue,
+        turnover,
+      },
+      funnel: { viewers: totalViewers, sold: totalSold, returned: totalReturned },
+      rankDist,
+      categories,
+      products: rows,
+    };
+
+    this.productAnalyticsCache.set(storeId, { fetchedAt: Date.now(), payload });
+    return payload;
   }
 
   async getBatchLabelsPdf(

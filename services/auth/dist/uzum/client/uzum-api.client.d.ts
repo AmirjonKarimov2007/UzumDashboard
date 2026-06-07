@@ -161,6 +161,18 @@ export declare class UzumApiClient {
         skuAmountList: any[];
     }>;
     getAllStocks(storeId: string, apiKey: string, shopId?: string): Promise<any[]>;
+    setStocks(storeId: string, apiKey: string, items: Array<{
+        skuId: number;
+        barcode: string;
+        amount: number;
+        fbsLinked: boolean;
+        fbsAllowed: boolean;
+        dbsLinked: boolean;
+        dbsAllowed: boolean;
+    }>): Promise<{
+        totalRecords: number;
+        updatedRecords: number;
+    }>;
     getFbsOrders(storeId: string, apiKey: string, shopId: string | number, status?: string, page?: number, size?: number, extra?: {
         scheme?: 'FBS' | 'DBS';
         dateFrom?: number;

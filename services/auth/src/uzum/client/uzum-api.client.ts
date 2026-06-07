@@ -677,6 +677,41 @@ export class UzumApiClient {
     return skuAmountList;
   }
 
+  /**
+   * Updates FBS SKU stock amounts. PARTIAL update — only the SKUs in `items`
+   * are affected; everything else is left untouched.
+   *
+   * CRITICAL: each item MUST carry its link/allow flags. If `fbsLinked` is
+   * omitted/false the API sets the amount to 0 AND unlinks the SKU from FBS.
+   * Callers must pass the SKU's current barcode + flags (fbsLinked: true to
+   * keep it sellable on FBS). Returns { totalRecords, updatedRecords }.
+   */
+  async setStocks(
+    storeId: string,
+    apiKey: string,
+    items: Array<{
+      skuId: number;
+      barcode: string;
+      amount: number;
+      fbsLinked: boolean;
+      fbsAllowed: boolean;
+      dbsLinked: boolean;
+      dbsAllowed: boolean;
+    }>,
+  ): Promise<{ totalRecords: number; updatedRecords: number }> {
+    const data = await this.executeWithRetry<{ payload: { totalRecords: number; updatedRecords: number } }>(
+      storeId,
+      apiKey,
+      '/v2/fbs/sku/stocks',
+      'POST',
+      (client) => client.post('/v2/fbs/sku/stocks', { skuAmountList: items }),
+    );
+    return {
+      totalRecords: data?.payload?.totalRecords ?? 0,
+      updatedRecords: data?.payload?.updatedRecords ?? 0,
+    };
+  }
+
   // ─── FBS (Fulfillment By Seller) ──────────────────────────────────────────
 
   async getFbsOrders(

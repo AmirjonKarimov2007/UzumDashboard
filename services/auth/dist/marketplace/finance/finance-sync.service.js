@@ -497,8 +497,10 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             const qty = Number(it.amount || 0) - Number(it.amountReturns || 0);
             const dateMs = Number(it.date || it.dateIssued || toMs);
             const b = bucketOf(dateMs);
-            const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0 };
+            const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0, qty: 0, orders: new Set() };
             ch.revenue += profit;
+            if (it.orderId != null)
+                ch.orders.add(it.orderId);
             const catName = (pid && cost.categoryByProductId[pid]) || 'Boshqa';
             catMap.set(catName, (catMap.get(catName) || 0) + profit);
             const prodKey = pid || name;
@@ -519,6 +521,7 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             }
             if (qty > 0) {
                 totalSoldQty += qty;
+                ch.qty += qty;
                 if (it.skuTitle)
                     soldTitles.add(String(it.skuTitle));
                 pm.qty += qty;
@@ -536,7 +539,7 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         }
         const chart = [...chartMap.values()]
             .sort((a, b) => a.sort - b.sort)
-            .map((c) => ({ name: c.label, revenue: Math.round(c.revenue), costUsd: c.costUsd }));
+            .map((c) => ({ name: c.label, revenue: Math.round(c.revenue), costUsd: c.costUsd, orders: c.orders.size, qty: c.qty }));
         const catTotal = [...catMap.values()].reduce((s, v) => s + v, 0) || 1;
         const categories = [...catMap.entries()]
             .map(([name, rev]) => ({ name, revenue: Math.round(rev), percentage: (rev / catTotal) * 100 }))
@@ -556,6 +559,7 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
             dateTo: toMs,
             revenue,
             orders: orderIds.size,
+            unitsSold: totalSoldQty,
             activeProducts: cost.activeProducts,
             costUsd,
             coverage: {

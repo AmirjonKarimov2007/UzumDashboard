@@ -10,6 +10,8 @@ export declare class FbsService {
     private productsCache;
     private productsInflight;
     private readonly PRODUCTS_TTL_MS;
+    private productAnalyticsCache;
+    private readonly PRODUCT_ANALYTICS_TTL_MS;
     constructor(uzumClient: UzumApiClient, storesService: StoresService, financeSync: FinanceSyncService);
     getOrders(userId: string, storeId: string, status?: string, page?: number, size?: number, extra?: {
         scheme?: 'FBS' | 'DBS';
@@ -57,10 +59,45 @@ export declare class FbsService {
     getInvoiceOrders(userId: string, storeId: string, invoiceId: number | string): Promise<{
         orders: any[];
     }>;
-    getLiveStocks(userId: string, storeId: string): Promise<{
-        stocks: any[];
+    private stockMetaCache;
+    private readonly STOCK_META_TTL_MS;
+    private pickStockImage;
+    private getStockMeta;
+    getLiveStocks(userId: string, storeId: string, force?: boolean): Promise<{
+        stocks: {
+            skuId: any;
+            skuTitle: any;
+            productTitle: any;
+            barcode: any;
+            amount: any;
+            fbsLinked: any;
+            fbsAllowed: any;
+            dbsLinked: any;
+            dbsAllowed: any;
+            sellerSkuCode: any;
+            image: any;
+            productId: any;
+            price: any;
+            purchasePrice: any;
+            sold: any;
+            category: any;
+            article: any;
+        }[];
         total: number;
+        totalUnits: any;
+        totalValue: number;
+        inStock: number;
+        outOfStock: number;
     }>;
+    setStocks(userId: string, storeId: string, updates: Array<{
+        skuId: number;
+        amount: number;
+    }>): Promise<{
+        totalRecords: number;
+        updatedRecords: number;
+        skipped: number[];
+    }>;
+    getProductAnalytics(userId: string, storeId: string, force?: boolean): Promise<any>;
     getBatchLabelsPdf(userId: string, storeId: string, orderIds: (number | string)[], size?: 'LARGE' | 'SMALL'): Promise<{
         total: number;
         success: number;

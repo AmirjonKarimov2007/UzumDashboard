@@ -608,7 +608,7 @@ export class FinanceSyncService {
     const orderIds = new Set<string | number>();
     const soldTitles = new Set<string>();
 
-    const chartMap = new Map<string, { label: string; sort: number; revenue: number; costUsd: number }>();
+    const chartMap = new Map<string, { label: string; sort: number; revenue: number; costUsd: number; qty: number; orders: Set<string | number> }>();
     const catMap = new Map<string, number>();                 // kategoriya → revenue
     const prodMap = new Map<string, { name: string; revenue: number; qty: number; image: string }>();
     const orderAgg = new Map<string | number, { orderId: any; name: string; sub: string; total: number; items: number; status: string; date: number }>();
@@ -630,8 +630,9 @@ export class FinanceSyncService {
       // Daromad dinamikasi (kun/hafta/oy)
       const dateMs = Number(it.date || it.dateIssued || toMs);
       const b = bucketOf(dateMs);
-      const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0 };
+      const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0, qty: 0, orders: new Set<string | number>() };
       ch.revenue += profit;
+      if (it.orderId != null) ch.orders.add(it.orderId);
 
       // Kategoriya (daromad bo'yicha)
       const catName = (pid && cost.categoryByProductId[pid]) || 'Boshqa';
@@ -655,6 +656,7 @@ export class FinanceSyncService {
 
       if (qty > 0) {
         totalSoldQty += qty;
+        ch.qty += qty;
         if (it.skuTitle) soldTitles.add(String(it.skuTitle));
         pm.qty += qty;
         // Tan narxni skuTitle (=skuFullTitle) bo'yicha, bo'lmasa productId bo'yicha topamiz
@@ -674,7 +676,7 @@ export class FinanceSyncService {
     // Chart — sana bo'yicha tartiblangan, { name, revenue, costUsd }
     const chart = [...chartMap.values()]
       .sort((a, b) => a.sort - b.sort)
-      .map((c) => ({ name: c.label, revenue: Math.round(c.revenue), costUsd: c.costUsd }));
+      .map((c) => ({ name: c.label, revenue: Math.round(c.revenue), costUsd: c.costUsd, orders: c.orders.size, qty: c.qty }));
 
     // Kategoriyalar — daromad bo'yicha, foiz bilan
     const catTotal = [...catMap.values()].reduce((s, v) => s + v, 0) || 1;
@@ -701,6 +703,7 @@ export class FinanceSyncService {
       dateTo: toMs,
       revenue,                                   // Jami daromad (sellerProfit only, UZS)
       orders: orderIds.size,                     // Davrda tushgan buyurtmalar (noyob orderId)
+      unitsSold: totalSoldQty,                   // Sotilgan birliklar (jami dona)
       activeProducts: cost.activeProducts,       // Faol mahsulotlar
       costUsd,                                   // Sotilgan mahsulotlar tan narxi (USD jami)
       coverage: {
