@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/database/prisma.service';
-import { UzumApiClient, UzumOrder } from '../../uzum/client/uzum-api.client';
+import { UzumApiClient } from '../../uzum/client/uzum-api.client';
 import { subDays, format } from 'date-fns';
 
 @Injectable()
@@ -41,18 +41,24 @@ export class OrdersSyncService {
     let synced = 0;
 
     for (const o of uzumOrders) {
-      const subtotal = (o.financialInfo?.totalAmount || 0) / 100;
-      const commission = (o.financialInfo?.commission || 0) / 100;
-      const deliveryFee = (o.financialInfo?.deliveryPrice || 0) / 100;
-      const discount = (o.financialInfo?.discount || 0) / 100;
-      const total = subtotal;
-      const profit = subtotal - commission - deliveryFee;
+      // v2 FBS order prices are already in soʻm (not tiyin). The FBS order list
+      // does not break out commission/delivery/discount — those come from the
+      // finance API — so we record the order total and leave the rest at 0.
+      const total = o.price || 0;
+      const subtotal = total;
+      const commission = 0;
+      const deliveryFee = 0;
+      const discount = 0;
+      const profit = total;
 
       const orderData = {
         storeId,
-        scheme: o.deliverySchema === 'DBS' ? 'DBS' : ('FBS' as any),
+        orderNumber: o.publicId || null,
+        scheme: o.scheme === 'DBS' ? 'DBS' : ('FBS' as any),
         status: this.mapOrderStatus(o.status),
-        customerName: o.deliveryInfo?.customerFullName || null,
+        // deliveryInfo is null for FBS orders (customer is hidden); populated
+        // only for DBS. Guarded so both schemes map safely.
+        customerName: o.deliveryInfo?.customerFullname || null,
         customerPhone: o.deliveryInfo?.customerPhone || null,
         deliveryAddress: o.deliveryInfo?.deliveryAddress || null,
         deliveryCity: o.deliveryInfo?.city || null,
@@ -62,14 +68,14 @@ export class OrdersSyncService {
         discount,
         total,
         profit,
-        orderedAt: o.orderDate ? new Date(o.orderDate) : null,
+        orderedAt: o.dateCreated ? new Date(o.dateCreated) : null,
       };
 
       const order = await this.prisma.order.upsert({
-        where: { uzumOrderId: String(o.orderId) },
+        where: { uzumOrderId: String(o.id) },
         create: {
           ...orderData,
-          uzumOrderId: String(o.orderId),
+          uzumOrderId: String(o.id),
         },
         update: orderData,
       });
@@ -80,19 +86,27 @@ export class OrdersSyncService {
         await this.prisma.orderItem.deleteMany({ where: { orderId: order.id } });
 
         for (const item of o.orderItems) {
-          const product = await this.prisma.product.findFirst({
-            where: { storeId, uzumSkuId: String(item.skuId) },
-          });
+          // v2 order items have no skuId — link to the catalog by uzumProductId
+          // (best-effort; a product may have several SKUs). The barcode is the
+          // most stable per-variant identifier available, so store it.
+          const product = item.productId
+            ? await this.prisma.product.findFirst({
+                where: { storeId, uzumProductId: String(item.productId) },
+              })
+            : null;
+
+          const qty = item.amount || 1;
+          const price = item.price || 0;
 
           await this.prisma.orderItem.create({
             data: {
               orderId: order.id,
               productId: product?.id || null,
-              uzumSkuId: String(item.skuId),
-              name: item.skuTitle || 'Unknown',
-              quantity: item.qty || 1,
-              price: (item.price || 0) / 100,
-              total: (item.totalPrice || 0) / 100,
+              uzumSkuId: String(item.barcode ?? item.id),
+              name: item.title || item.skuTitle || 'Unknown',
+              quantity: qty,
+              price,
+              total: price * qty,
             },
           });
         }
@@ -102,6 +116,11 @@ export class OrdersSyncService {
     }
 
     this.logger.log(`Synced ${synced} orders for store ${storeId}`);
+
+    // NOTE: new-order Telegram notifications are handled by TelegramOrderPoller
+    // (queue-independent), so they keep working even when the BullMQ/Redis sync
+    // pipeline is down. We deliberately do NOT notify here to avoid duplicates.
+
     return synced;
   }
 

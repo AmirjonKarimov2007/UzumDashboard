@@ -32,17 +32,18 @@ let OrdersSyncService = OrdersSyncService_1 = class OrdersSyncService {
         }
         let synced = 0;
         for (const o of uzumOrders) {
-            const subtotal = (o.financialInfo?.totalAmount || 0) / 100;
-            const commission = (o.financialInfo?.commission || 0) / 100;
-            const deliveryFee = (o.financialInfo?.deliveryPrice || 0) / 100;
-            const discount = (o.financialInfo?.discount || 0) / 100;
-            const total = subtotal;
-            const profit = subtotal - commission - deliveryFee;
+            const total = o.price || 0;
+            const subtotal = total;
+            const commission = 0;
+            const deliveryFee = 0;
+            const discount = 0;
+            const profit = total;
             const orderData = {
                 storeId,
-                scheme: o.deliverySchema === 'DBS' ? 'DBS' : 'FBS',
+                orderNumber: o.publicId || null,
+                scheme: o.scheme === 'DBS' ? 'DBS' : 'FBS',
                 status: this.mapOrderStatus(o.status),
-                customerName: o.deliveryInfo?.customerFullName || null,
+                customerName: o.deliveryInfo?.customerFullname || null,
                 customerPhone: o.deliveryInfo?.customerPhone || null,
                 deliveryAddress: o.deliveryInfo?.deliveryAddress || null,
                 deliveryCity: o.deliveryInfo?.city || null,
@@ -52,31 +53,35 @@ let OrdersSyncService = OrdersSyncService_1 = class OrdersSyncService {
                 discount,
                 total,
                 profit,
-                orderedAt: o.orderDate ? new Date(o.orderDate) : null,
+                orderedAt: o.dateCreated ? new Date(o.dateCreated) : null,
             };
             const order = await this.prisma.order.upsert({
-                where: { uzumOrderId: String(o.orderId) },
+                where: { uzumOrderId: String(o.id) },
                 create: {
                     ...orderData,
-                    uzumOrderId: String(o.orderId),
+                    uzumOrderId: String(o.id),
                 },
                 update: orderData,
             });
             if (o.orderItems?.length) {
                 await this.prisma.orderItem.deleteMany({ where: { orderId: order.id } });
                 for (const item of o.orderItems) {
-                    const product = await this.prisma.product.findFirst({
-                        where: { storeId, uzumSkuId: String(item.skuId) },
-                    });
+                    const product = item.productId
+                        ? await this.prisma.product.findFirst({
+                            where: { storeId, uzumProductId: String(item.productId) },
+                        })
+                        : null;
+                    const qty = item.amount || 1;
+                    const price = item.price || 0;
                     await this.prisma.orderItem.create({
                         data: {
                             orderId: order.id,
                             productId: product?.id || null,
-                            uzumSkuId: String(item.skuId),
-                            name: item.skuTitle || 'Unknown',
-                            quantity: item.qty || 1,
-                            price: (item.price || 0) / 100,
-                            total: (item.totalPrice || 0) / 100,
+                            uzumSkuId: String(item.barcode ?? item.id),
+                            name: item.title || item.skuTitle || 'Unknown',
+                            quantity: qty,
+                            price,
+                            total: price * qty,
                         },
                     });
                 }

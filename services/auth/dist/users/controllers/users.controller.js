@@ -37,6 +37,13 @@ __decorate([
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], UpdateProfileDto.prototype, "avatar", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    (0, class_validator_1.Min)(1, { message: 'Kurs noto\'g\'ri' }),
+    (0, class_validator_1.Max)(1_000_000, { message: 'Kurs juda katta' }),
+    __metadata("design:type", Number)
+], UpdateProfileDto.prototype, "usdRate", void 0);
 let UsersController = class UsersController {
     constructor(usersService) {
         this.usersService = usersService;
@@ -51,6 +58,7 @@ let UsersController = class UsersController {
             email: user.email,
             name: user.name,
             avatar: user.avatar,
+            usdRate: user.usdRate,
             isActive: user.isActive,
             stores: user.stores,
         };
@@ -63,6 +71,7 @@ let UsersController = class UsersController {
             email: updated.email,
             name: updated.name,
             avatar: updated.avatar,
+            usdRate: updated.usdRate,
         };
     }
 };

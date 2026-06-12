@@ -109,7 +109,12 @@ export class FbsService {
     return { orderItems, total, page, size };
   }
 
-  /** Sequential counts across all FBS statuses (rate-limit safe) with 60s cache */
+  // Bitta kalit uchun parallel yangilashlarni deduplikatsiya qilish
+  private countsInflight = new Map<string, Promise<Record<string, number>>>();
+
+  /** Counts across all FBS statuses with 60s cache.
+   *  Stale-while-revalidate: muddati o'tgan kesh darhol qaytariladi (tab
+   *  badge'lari bir zumda chiqadi), yangilash fonda ketadi. */
   async getOrderCounts(
     userId: string,
     storeId: string,
@@ -121,24 +126,60 @@ export class FbsService {
     if (cached && cached.expiresAt > Date.now()) {
       return cached.data;
     }
-
-    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    const statuses = [
-      'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
-      'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
-      'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
-    ];
-    // Sequential with small gaps to respect per-second token bucket
-    // ~250ms gap keeps us under the burst window and minimizes 429 retries
-    const result: Record<string, number> = {};
-    for (const status of statuses) {
-      result[status] = await this.uzumClient.getFbsOrderCount(
-        storeId, apiKey, uzumShopId, status, dateFrom, dateTo,
-      );
-      await new Promise((r) => setTimeout(r, 250));
+    if (cached) {
+      // Eski (muddati o'tgan) qiymatni darhol qaytarib, fonda yangilaymiz
+      if (!this.countsInflight.has(cacheKey)) {
+        void this.refreshOrderCounts(userId, storeId, cacheKey, dateFrom, dateTo).catch(
+          (e) => this.logger.warn(`Counts bg refresh failed: ${e?.message}`),
+        );
+      }
+      return cached.data;
     }
-    this.countsCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
-    return result;
+    return this.refreshOrderCounts(userId, storeId, cacheKey, dateFrom, dateTo);
+  }
+
+  private refreshOrderCounts(
+    userId: string,
+    storeId: string,
+    cacheKey: string,
+    dateFrom?: number,
+    dateTo?: number,
+  ): Promise<Record<string, number>> {
+    const existing = this.countsInflight.get(cacheKey);
+    if (existing) return existing;
+
+    const run = (async () => {
+      const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+      const statuses = [
+        'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
+        'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
+        'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
+      ];
+      const prev = this.countsCache.get(cacheKey)?.data;
+      const result: Record<string, number> = {};
+      // 3 talik parallel partiyalar + 200ms oraliq — token bucketga sig'adi,
+      // sovuq yuklash ~6s dan ~1.5s ga tushadi. 429 bo'lsa client ichida retry bor.
+      const CHUNK = 3;
+      for (let i = 0; i < statuses.length; i += CHUNK) {
+        const chunk = statuses.slice(i, i + CHUNK);
+        const counts = await Promise.all(
+          chunk.map((status) =>
+            this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, status, dateFrom, dateTo),
+          ),
+        );
+        chunk.forEach((status, k) => {
+          const n = counts[k];
+          // Xato bo'lsa noto'g'ri 0 ko'rsatmaymiz — oxirgi ma'lum qiymat qoladi
+          result[status] = n != null ? n : prev?.[status] ?? 0;
+        });
+        if (i + CHUNK < statuses.length) await new Promise((r) => setTimeout(r, 200));
+      }
+      this.countsCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
+      return result;
+    })().finally(() => this.countsInflight.delete(cacheKey));
+
+    this.countsInflight.set(cacheKey, run);
+    return run;
   }
 
   async getOrdersAdvanced(
@@ -167,8 +208,9 @@ export class FbsService {
   async confirmOrder(userId: string, storeId: string, orderId: number | string) {
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
     const result = await this.uzumClient.confirmFbsOrder(storeId, apiKey, orderId);
-    // Invalidate counts cache so the tab badge updates immediately
-    this.countsCache.clear();
+    // Keshni o'chirmaymiz — muddati o'tgan deb belgilaymiz. Keyingi so'rov eski
+    // qiymatni darhol oladi (SWR), yangilash fonda ketadi; badge qotib qolmaydi.
+    for (const entry of this.countsCache.values()) entry.expiresAt = 0;
     return result;
   }
 

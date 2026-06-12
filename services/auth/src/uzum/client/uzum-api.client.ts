@@ -72,32 +72,43 @@ export interface UzumProduct {
   characteristics?: Record<string, string>;
 }
 
+// Shape of a v2 FBS order (GET /v2/fbs/orders → payload.orders[]).
+// Prices are already in soʻm (NOT tiyin). Dates are epoch milliseconds.
+// Note: the FBS order list does NOT expose customer info (deliveryInfo is
+// null for FBS) nor a commission/discount breakdown — those live in the
+// finance API. Order items carry `productId` + `barcode` but no `skuId`.
 export interface UzumOrder {
-  orderId: number;
-  deliverySchema: string;
+  id: number;
+  publicId?: string;
+  scheme: string;
   status: string;
-  orderDate: string;
+  dateCreated: number;
+  acceptedDate?: number | null;
+  deliveryDate?: number | null;
+  completedDate?: number | null;
+  dateCancelled?: number | null;
+  returnDate?: number | null;
+  price: number;
+  shopId?: number;
+  stock?: { id?: number; title?: string; address?: string };
   orderItems: UzumOrderItem[];
   deliveryInfo?: {
-    customerFullName?: string;
+    customerFullname?: string;
     customerPhone?: string;
     deliveryAddress?: string;
+    deliveryComment?: string;
     city?: string;
-  };
-  financialInfo?: {
-    totalAmount: number;
-    commission: number;
-    deliveryPrice: number;
-    discount: number;
-  };
+  } | null;
 }
 
 export interface UzumOrderItem {
-  skuId: number;
-  skuTitle: string;
-  qty: number;
+  id: number;
+  barcode?: number | string;
+  skuTitle?: string;
+  title?: string;
   price: number;
-  totalPrice: number;
+  amount: number;
+  productId?: number;
 }
 
 export interface UzumFinanceOrder {
@@ -302,9 +313,17 @@ export class UzumApiClient {
         }
 
         if (statusCode === 429) {
-          const retryAfter = parseInt(axiosErr.response?.headers['retry-after'] || '60', 10);
-          this.logger.warn(`Rate limited on attempt ${attempt}. Waiting ${retryAfter}s`);
-          await this.sleep(retryAfter * 1000);
+          // Uzum sometimes sends a large/absent Retry-After. Blocking the request
+          // for 60s+ makes the UI look frozen (and exceeds the client timeout), so
+          // cap the wait and only sleep if we still have an attempt left. After the
+          // attempts run out we fail fast — SWR cache / a quick retry serve instead.
+          lastError = axiosErr;
+          if (attempt < this.maxRetries) {
+            const retryAfter = parseInt(axiosErr.response?.headers['retry-after'] || '0', 10);
+            const waitMs = Math.min(Math.max(retryAfter, 1), 6) * 1000;
+            this.logger.warn(`Rate limited on attempt ${attempt}. Waiting ${waitMs}ms (capped)`);
+            await this.sleep(waitMs);
+          }
           continue;
         }
 
@@ -394,6 +413,24 @@ export class UzumApiClient {
 
   // ─── Orders ───────────────────────────────────────────────────────────────
 
+  // Normalizes a date (epoch-ms number, ISO/`yyyy-MM-dd` string, or Date) into
+  // the epoch-SECOND timestamp that `/v2/fbs/orders` filters on.
+  // IMPORTANT (verified live against shop 93715): the `dateFrom`/`dateTo` query
+  // params are epoch *seconds*, NOT milliseconds — even though each order's
+  // own `dateCreated` field is in milliseconds. Passing a formatted date
+  // string returns HTTP 400 "bad-request-001"; passing milliseconds is
+  // accepted (HTTP 200) but silently matches nothing (the window lands in the
+  // far future), so the call appears to "work" while fetching zero orders.
+  private toEpochSeconds(value?: number | string | Date | null): number | undefined {
+    if (value == null) return undefined;
+    const ms = typeof value === 'number'
+      ? value
+      : value instanceof Date
+        ? value.getTime()
+        : new Date(value).getTime();
+    return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
+  }
+
   async getOrders(
     storeId: string,
     apiKey: string,
@@ -403,10 +440,10 @@ export class UzumApiClient {
       size?: number;
       status?: string;
       scheme?: string;
-      dateFrom?: string;
-      dateTo?: string;
+      dateFrom?: number | string;
+      dateTo?: number | string;
     } = {},
-  ): Promise<UzumPaginatedResponse<UzumOrder>> {
+  ): Promise<{ orders: UzumOrder[]; totalAmount?: number }> {
     const { page = 0, size = 50, status, scheme, dateFrom, dateTo } = params;
 
     const queryParams: Record<string, unknown> = {
@@ -416,25 +453,32 @@ export class UzumApiClient {
     };
     if (status) queryParams.status = status;
     if (scheme) queryParams.scheme = scheme;
-    if (dateFrom) queryParams.dateFrom = dateFrom;
-    if (dateTo) queryParams.dateTo = dateTo;
+    const fromSec = this.toEpochSeconds(dateFrom);
+    const toSec = this.toEpochSeconds(dateTo);
+    if (fromSec != null) queryParams.dateFrom = fromSec;
+    if (toSec != null) queryParams.dateTo = toSec;
 
-    const data = await this.executeWithRetry<UzumPaginatedResponse<UzumOrder>>(
+    const data = await this.executeWithRetry<{
+      payload: { orders: UzumOrder[]; totalAmount?: number };
+    }>(
       storeId,
       apiKey,
       '/v2/fbs/orders',
       'GET',
       (client) => client.get('/v2/fbs/orders', { params: queryParams }),
     );
-    return data;
+    return {
+      orders: data?.payload?.orders || [],
+      totalAmount: data?.payload?.totalAmount,
+    };
   }
 
   async getAllOrders(
     storeId: string,
     apiKey: string,
     shopIds: string[],
-    dateFrom?: string,
-    dateTo?: string,
+    dateFrom?: number | string,
+    dateTo?: number | string,
   ): Promise<UzumOrder[]> {
     const pageSize = 50;
     const allOrders: UzumOrder[] = [];
@@ -450,7 +494,7 @@ export class UzumApiClient {
 
       while (hasMore) {
         await this.sleep(150);
-        const response = await this.getOrders(storeId, apiKey, shopIds, {
+        const { orders } = await this.getOrders(storeId, apiKey, shopIds, {
           page,
           size: pageSize,
           status,
@@ -458,13 +502,13 @@ export class UzumApiClient {
           dateTo,
         });
 
-        if (!response?.payload?.length) {
+        if (!orders.length) {
           hasMore = false;
           break;
         }
 
-        allOrders.push(...response.payload);
-        hasMore = response.payload.length === pageSize;
+        allOrders.push(...orders);
+        hasMore = orders.length === pageSize;
         page++;
       }
     }
@@ -778,6 +822,8 @@ export class UzumApiClient {
     return all;
   }
 
+  /** Returns null on failure (not 0) so callers can keep the last known value
+   *  instead of flashing a wrong zero in the UI. */
   async getFbsOrderCount(
     storeId: string,
     apiKey: string,
@@ -785,7 +831,7 @@ export class UzumApiClient {
     status: string,
     dateFrom?: number,
     dateTo?: number,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const client = this.buildClient(apiKey);
     const params = {
       shopIds: shopId,
@@ -806,10 +852,10 @@ export class UzumApiClient {
           continue;
         }
         this.logger.warn(`count failed for status=${status}: ${err?.message}`);
-        return 0;
+        return null;
       }
     }
-    return 0;
+    return null;
   }
 
   /** Confirm a CREATED order — moves it to PACKING status */

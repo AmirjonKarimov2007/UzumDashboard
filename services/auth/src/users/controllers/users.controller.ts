@@ -7,7 +7,15 @@ import {
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
-import { IsEmail, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEmail,
+  IsNumber,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Max,
+  Min,
+} from 'class-validator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UsersService } from '../users.service';
@@ -25,6 +33,12 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsString()
   avatar?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1, { message: 'Kurs noto\'g\'ri' })
+  @Max(1_000_000, { message: 'Kurs juda katta' })
+  usdRate?: number;
 }
 
 @Controller('users')
@@ -42,6 +56,7 @@ export class UsersController {
       email: user.email,
       name: user.name,
       avatar: user.avatar,
+      usdRate: user.usdRate,
       isActive: user.isActive,
       stores: user.stores,
     };
@@ -59,6 +74,7 @@ export class UsersController {
       email: updated.email,
       name: updated.name,
       avatar: updated.avatar,
+      usdRate: updated.usdRate,
     };
   }
 }

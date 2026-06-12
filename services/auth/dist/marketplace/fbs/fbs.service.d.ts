@@ -33,7 +33,9 @@ export declare class FbsService {
         page: number;
         size: number;
     }>;
+    private countsInflight;
     getOrderCounts(userId: string, storeId: string, dateFrom?: number, dateTo?: number): Promise<Record<string, number>>;
+    private refreshOrderCounts;
     getOrdersAdvanced(userId: string, storeId: string, params: {
         status?: string;
         page?: number;

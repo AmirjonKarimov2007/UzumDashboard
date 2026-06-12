@@ -149,9 +149,13 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                     throw new common_1.UnauthorizedException('Uzum API ruxsat rad etildi — do\'kon ruxsatlarini tekshiring');
                 }
                 if (statusCode === 429) {
-                    const retryAfter = parseInt(axiosErr.response?.headers['retry-after'] || '60', 10);
-                    this.logger.warn(`Rate limited on attempt ${attempt}. Waiting ${retryAfter}s`);
-                    await this.sleep(retryAfter * 1000);
+                    lastError = axiosErr;
+                    if (attempt < this.maxRetries) {
+                        const retryAfter = parseInt(axiosErr.response?.headers['retry-after'] || '0', 10);
+                        const waitMs = Math.min(Math.max(retryAfter, 1), 6) * 1000;
+                        this.logger.warn(`Rate limited on attempt ${attempt}. Waiting ${waitMs}ms (capped)`);
+                        await this.sleep(waitMs);
+                    }
                     continue;
                 }
                 lastError = axiosErr;
@@ -197,6 +201,16 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         }
         return allProducts;
     }
+    toEpochSeconds(value) {
+        if (value == null)
+            return undefined;
+        const ms = typeof value === 'number'
+            ? value
+            : value instanceof Date
+                ? value.getTime()
+                : new Date(value).getTime();
+        return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
+    }
     async getOrders(storeId, apiKey, shopIds, params = {}) {
         const { page = 0, size = 50, status, scheme, dateFrom, dateTo } = params;
         const queryParams = {
@@ -208,12 +222,17 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             queryParams.status = status;
         if (scheme)
             queryParams.scheme = scheme;
-        if (dateFrom)
-            queryParams.dateFrom = dateFrom;
-        if (dateTo)
-            queryParams.dateTo = dateTo;
+        const fromSec = this.toEpochSeconds(dateFrom);
+        const toSec = this.toEpochSeconds(dateTo);
+        if (fromSec != null)
+            queryParams.dateFrom = fromSec;
+        if (toSec != null)
+            queryParams.dateTo = toSec;
         const data = await this.executeWithRetry(storeId, apiKey, '/v2/fbs/orders', 'GET', (client) => client.get('/v2/fbs/orders', { params: queryParams }));
-        return data;
+        return {
+            orders: data?.payload?.orders || [],
+            totalAmount: data?.payload?.totalAmount,
+        };
     }
     async getAllOrders(storeId, apiKey, shopIds, dateFrom, dateTo) {
         const pageSize = 50;
@@ -227,19 +246,19 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
             let hasMore = true;
             while (hasMore) {
                 await this.sleep(150);
-                const response = await this.getOrders(storeId, apiKey, shopIds, {
+                const { orders } = await this.getOrders(storeId, apiKey, shopIds, {
                     page,
                     size: pageSize,
                     status,
                     dateFrom,
                     dateTo,
                 });
-                if (!response?.payload?.length) {
+                if (!orders.length) {
                     hasMore = false;
                     break;
                 }
-                allOrders.push(...response.payload);
-                hasMore = response.payload.length === pageSize;
+                allOrders.push(...orders);
+                hasMore = orders.length === pageSize;
                 page++;
             }
         }
@@ -408,10 +427,10 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
                     continue;
                 }
                 this.logger.warn(`count failed for status=${status}: ${err?.message}`);
-                return 0;
+                return null;
             }
         }
-        return 0;
+        return null;
     }
     async confirmFbsOrder(storeId, apiKey, orderId) {
         const client = this.buildClient(apiKey);

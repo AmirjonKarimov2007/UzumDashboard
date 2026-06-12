@@ -16,6 +16,7 @@ process.on('uncaughtException', (err) => {
 });
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
+    app.enableShutdownHooks();
     const configService = app.get(config_1.ConfigService);
     const port = configService.get('APP_PORT') || 3001;
     const corsOrigins = configService.get('CORS_ORIGINS')?.split(',') || ['*'];

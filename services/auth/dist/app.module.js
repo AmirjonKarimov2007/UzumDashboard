@@ -26,6 +26,7 @@ const finance_module_1 = require("./marketplace/finance/finance.module");
 const analytics_module_1 = require("./marketplace/analytics/analytics.module");
 const inventory_module_1 = require("./marketplace/inventory/inventory.module");
 const fbs_module_1 = require("./marketplace/fbs/fbs.module");
+const telegram_module_1 = require("./marketplace/telegram/telegram.module");
 const sync_module_1 = require("./sync/sync.module");
 let AppModule = class AppModule {
 };
@@ -67,6 +68,7 @@ exports.AppModule = AppModule = __decorate([
             analytics_module_1.AnalyticsModule,
             inventory_module_1.InventoryModule,
             fbs_module_1.FbsModule,
+            telegram_module_1.TelegramModule,
             sync_module_1.SyncModule,
         ],
     })

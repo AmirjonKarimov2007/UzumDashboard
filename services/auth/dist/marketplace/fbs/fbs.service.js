@@ -27,6 +27,7 @@ let FbsService = FbsService_1 = class FbsService {
         this.PRODUCTS_TTL_MS = 2 * 60 * 1000;
         this.productAnalyticsCache = new Map();
         this.PRODUCT_ANALYTICS_TTL_MS = 5 * 60 * 1000;
+        this.countsInflight = new Map();
         this.stockMetaCache = new Map();
         this.STOCK_META_TTL_MS = 5 * 60 * 1000;
     }
@@ -84,19 +85,43 @@ let FbsService = FbsService_1 = class FbsService {
         if (cached && cached.expiresAt > Date.now()) {
             return cached.data;
         }
-        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-        const statuses = [
-            'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
-            'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
-            'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
-        ];
-        const result = {};
-        for (const status of statuses) {
-            result[status] = await this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, status, dateFrom, dateTo);
-            await new Promise((r) => setTimeout(r, 250));
+        if (cached) {
+            if (!this.countsInflight.has(cacheKey)) {
+                void this.refreshOrderCounts(userId, storeId, cacheKey, dateFrom, dateTo).catch((e) => this.logger.warn(`Counts bg refresh failed: ${e?.message}`));
+            }
+            return cached.data;
         }
-        this.countsCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
-        return result;
+        return this.refreshOrderCounts(userId, storeId, cacheKey, dateFrom, dateTo);
+    }
+    refreshOrderCounts(userId, storeId, cacheKey, dateFrom, dateTo) {
+        const existing = this.countsInflight.get(cacheKey);
+        if (existing)
+            return existing;
+        const run = (async () => {
+            const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+            const statuses = [
+                'CREATED', 'PACKING', 'PENDING_DELIVERY', 'DELIVERING',
+                'DELIVERED', 'ACCEPTED_AT_DP', 'DELIVERED_TO_CUSTOMER_DELIVERY_POINT',
+                'COMPLETED', 'CANCELED', 'PENDING_CANCELLATION', 'RETURNED',
+            ];
+            const prev = this.countsCache.get(cacheKey)?.data;
+            const result = {};
+            const CHUNK = 3;
+            for (let i = 0; i < statuses.length; i += CHUNK) {
+                const chunk = statuses.slice(i, i + CHUNK);
+                const counts = await Promise.all(chunk.map((status) => this.uzumClient.getFbsOrderCount(storeId, apiKey, uzumShopId, status, dateFrom, dateTo)));
+                chunk.forEach((status, k) => {
+                    const n = counts[k];
+                    result[status] = n != null ? n : prev?.[status] ?? 0;
+                });
+                if (i + CHUNK < statuses.length)
+                    await new Promise((r) => setTimeout(r, 200));
+            }
+            this.countsCache.set(cacheKey, { data: result, expiresAt: Date.now() + 60_000 });
+            return result;
+        })().finally(() => this.countsInflight.delete(cacheKey));
+        this.countsInflight.set(cacheKey, run);
+        return run;
     }
     async getOrdersAdvanced(userId, storeId, params) {
         const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
@@ -114,7 +139,8 @@ let FbsService = FbsService_1 = class FbsService {
     async confirmOrder(userId, storeId, orderId) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         const result = await this.uzumClient.confirmFbsOrder(storeId, apiKey, orderId);
-        this.countsCache.clear();
+        for (const entry of this.countsCache.values())
+            entry.expiresAt = 0;
         return result;
     }
     async getInvoices(userId, storeId, statuses, page = 0, size = 20) {

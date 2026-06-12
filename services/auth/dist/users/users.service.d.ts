@@ -23,6 +23,7 @@ export declare class UsersService {
         password: string | null;
         avatar: string | null;
         isActive: boolean;
+        usdRate: number;
         updatedAt: Date;
     }) | null>;
     findByPhone(phone: string): Promise<({
@@ -46,12 +47,14 @@ export declare class UsersService {
         password: string | null;
         avatar: string | null;
         isActive: boolean;
+        usdRate: number;
         updatedAt: Date;
     }) | null>;
     updateProfile(userId: string, data: {
         name?: string;
         email?: string;
         avatar?: string;
+        usdRate?: number;
     }): Promise<{
         phone: string;
         id: string;
@@ -61,6 +64,7 @@ export declare class UsersService {
         password: string | null;
         avatar: string | null;
         isActive: boolean;
+        usdRate: number;
         updatedAt: Date;
     }>;
     deactivateUser(userId: string): Promise<{
@@ -72,6 +76,7 @@ export declare class UsersService {
         password: string | null;
         avatar: string | null;
         isActive: boolean;
+        usdRate: number;
         updatedAt: Date;
     }>;
     getUserSessions(userId: string): Promise<{

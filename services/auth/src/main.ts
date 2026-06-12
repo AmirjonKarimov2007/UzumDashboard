@@ -21,6 +21,7 @@ process.on('uncaughtException', (err: Error) => {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('APP_PORT') || 3001;

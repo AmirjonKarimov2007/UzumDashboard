@@ -40,30 +40,40 @@ export interface UzumProduct {
     characteristics?: Record<string, string>;
 }
 export interface UzumOrder {
-    orderId: number;
-    deliverySchema: string;
+    id: number;
+    publicId?: string;
+    scheme: string;
     status: string;
-    orderDate: string;
+    dateCreated: number;
+    acceptedDate?: number | null;
+    deliveryDate?: number | null;
+    completedDate?: number | null;
+    dateCancelled?: number | null;
+    returnDate?: number | null;
+    price: number;
+    shopId?: number;
+    stock?: {
+        id?: number;
+        title?: string;
+        address?: string;
+    };
     orderItems: UzumOrderItem[];
     deliveryInfo?: {
-        customerFullName?: string;
+        customerFullname?: string;
         customerPhone?: string;
         deliveryAddress?: string;
+        deliveryComment?: string;
         city?: string;
-    };
-    financialInfo?: {
-        totalAmount: number;
-        commission: number;
-        deliveryPrice: number;
-        discount: number;
-    };
+    } | null;
 }
 export interface UzumOrderItem {
-    skuId: number;
-    skuTitle: string;
-    qty: number;
+    id: number;
+    barcode?: number | string;
+    skuTitle?: string;
+    title?: string;
     price: number;
-    totalPrice: number;
+    amount: number;
+    productId?: number;
 }
 export interface UzumFinanceOrder {
     orderId: number;
@@ -120,15 +130,19 @@ export declare class UzumApiClient {
         total: number;
     }>;
     getAllProducts(storeId: string, apiKey: string, shopId: string | number): Promise<any[]>;
+    private toEpochSeconds;
     getOrders(storeId: string, apiKey: string, shopIds: string[], params?: {
         page?: number;
         size?: number;
         status?: string;
         scheme?: string;
-        dateFrom?: string;
-        dateTo?: string;
-    }): Promise<UzumPaginatedResponse<UzumOrder>>;
-    getAllOrders(storeId: string, apiKey: string, shopIds: string[], dateFrom?: string, dateTo?: string): Promise<UzumOrder[]>;
+        dateFrom?: number | string;
+        dateTo?: number | string;
+    }): Promise<{
+        orders: UzumOrder[];
+        totalAmount?: number;
+    }>;
+    getAllOrders(storeId: string, apiKey: string, shopIds: string[], dateFrom?: number | string, dateTo?: number | string): Promise<UzumOrder[]>;
     getOrderById(storeId: string, apiKey: string, orderId: string): Promise<UzumOrder>;
     getFinanceOrders(storeId: string, apiKey: string, shopIds: (string | number)[], params?: {
         page?: number;
@@ -182,7 +196,7 @@ export declare class UzumApiClient {
         totalAmount?: number;
     }>;
     getAllFbsOrders(storeId: string, apiKey: string, shopId: string | number, statuses?: string[], dateFrom?: number, dateTo?: number): Promise<any[]>;
-    getFbsOrderCount(storeId: string, apiKey: string, shopId: string | number, status: string, dateFrom?: number, dateTo?: number): Promise<number>;
+    getFbsOrderCount(storeId: string, apiKey: string, shopId: string | number, status: string, dateFrom?: number, dateTo?: number): Promise<number | null>;
     confirmFbsOrder(storeId: string, apiKey: string, orderId: number | string): Promise<{
         ok: boolean;
         order?: any;

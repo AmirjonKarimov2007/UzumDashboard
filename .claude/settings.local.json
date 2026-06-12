@@ -71,7 +71,23 @@
       "Bash(taskkill /F /PID 7424)",
       "Bash(cmd *)",
       "Bash(pkill -f \"nest start\")",
-      "Bash(taskkill /F /PID 20576)"
+      "Bash(taskkill /F /PID 20576)",
+      "Bash(command -v uv)",
+      "Bash(uv tool *)",
+      "Bash(cat)",
+      "Bash('C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe' graphify-out/.graphify_step_2_detect_files_3.py)",
+      "Bash(rm -f graphify-out/.graphify_step_2_detect_files_3.py)",
+      "Bash(C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe *)",
+      "Bash(taskkill /F /PID 14632)",
+      "Bash(powershell -Command \"Get-Process -Id 14632 -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(python graphify-out/.graphify_step_for_cluster_only_23.py)",
+      "Bash(\"C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe\" graphify-out/.graphify_step_for_cluster_only_23.py)",
+      "Bash('C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe' -c ' *)",
+      "Bash(\"C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe\" graphify-out/.graphify_step_5_label_communities_10.py)",
+      "Bash(\"C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe\" graphify-out/.graphify_step_6_generate_obsidian_vault_opt_in_12.py)",
+      "Bash(\"C:\\\\Users\\\\alfatech.uz\\\\AppData\\\\Roaming\\\\uv\\\\tools\\\\graphifyy\\\\Scripts\\\\python.exe\" graphify-out/.graphify_cluster_resolution.py)",
+      "Bash(uv pip *)",
+      "Bash(git push *)"
     ]
   }
 }

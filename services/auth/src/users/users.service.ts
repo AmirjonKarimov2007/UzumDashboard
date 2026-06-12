@@ -30,7 +30,7 @@ export class UsersService {
    */
   async updateProfile(
     userId: string,
-    data: { name?: string; email?: string; avatar?: string },
+    data: { name?: string; email?: string; avatar?: string; usdRate?: number },
   ) {
     if (data.email) {
       const existing = await this.prisma.user.findFirst({

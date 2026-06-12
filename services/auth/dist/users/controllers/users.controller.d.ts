@@ -3,6 +3,7 @@ export declare class UpdateProfileDto {
     name?: string;
     email?: string;
     avatar?: string;
+    usdRate?: number;
 }
 export declare class UsersController {
     private readonly usersService;
@@ -13,6 +14,7 @@ export declare class UsersController {
         email: string | null;
         name: string | null;
         avatar: string | null;
+        usdRate: number;
         isActive: boolean;
         stores: {
             id: string;
@@ -32,5 +34,6 @@ export declare class UsersController {
         email: string | null;
         name: string | null;
         avatar: string | null;
+        usdRate: number;
     }>;
 }

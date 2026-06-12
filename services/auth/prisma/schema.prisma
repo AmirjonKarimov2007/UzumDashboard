@@ -19,6 +19,9 @@ model User {
   name      String?
   avatar    String?
   isActive  Boolean  @default(true)
+  // UZS per 1 USD — the exchange rate the user sets on the web navbar. Shared
+  // server-side so the Telegram bot computes net profit with the same rate.
+  usdRate   Float    @default(12900)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -28,6 +31,7 @@ model User {
   refreshTokens RefreshToken[]
   auditLogs     AuditLog[]
   notifications Notification[]
+  telegramUser  TelegramUser?
 
   @@index([phone])
   @@index([email])
@@ -539,6 +543,32 @@ enum NotificationCategory {
   AI
   SYSTEM
   TEAM
+}
+
+// ============================================
+// TELEGRAM BOT
+// ============================================
+
+// One TelegramUser per dashboard User. Linked at /start time when the user
+// shares their phone number from the bot — the phone matches the User row.
+model TelegramUser {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  chatId       String
+  phone        String
+  username     String?
+  firstName    String?
+  lastName     String?
+  notifyOrders Boolean  @default(true)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([phone])
+  @@map("telegram_users")
 }
 
 // ============================================
