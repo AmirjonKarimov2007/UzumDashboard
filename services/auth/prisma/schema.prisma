@@ -135,6 +135,7 @@ model Store {
   reports    Report[]
   insights   AiInsight[]
   notifications Notification[]
+  returns    ProductReturn[]
 
   @@index([userId])
   @@map("stores")
@@ -705,4 +706,50 @@ enum AuditAction {
   SYNC_STARTED
   SYNC_COMPLETED
   SYNC_FAILED
+}
+
+// ============================================
+// RETURNS ANALYTICS
+// ============================================
+// One row per returned order-item. Records are NEVER deleted — they are the
+// permanent historical ledger of returns, even after Uzum stops returning the
+// old record from its API. Sync upserts by (storeId, uzumOrderId, skuTitle).
+
+enum ReturnStatus {
+  RETURNED          // Uzum omborida kutyapti
+  READY_FOR_PICKUP  // Olib ketishga tayyor
+  RECEIVED          // Sotuvchi qabul qildi
+  LOST              // Yo'qolgan (15+ kun, qabul qilinmagan)
+}
+
+model ProductReturn {
+  id             String       @id @default(uuid())
+  storeId        String
+  uzumOrderId    String       // FBS order id (return source)
+  publicId       String?
+  skuId          String?
+  skuTitle       String?
+  productId      String?
+  productName    String?
+  barcode        String?
+  quantity       Int          @default(1)
+  costUsd        Decimal?     @db.Decimal(14, 2) // tan narx (USD)
+  salePrice      Decimal?     @db.Decimal(14, 2) // sotuv narxi (so'm)
+  reason         String?
+  status         ReturnStatus @default(RETURNED)
+  manualReceived Boolean      @default(false)    // sotuvchi qo'lda "qabul qildim" deb belgilagan
+  orderedAt      DateTime?
+  returnedAt     DateTime?
+  receivedAt     DateTime?
+  lastSeenAt     DateTime     @default(now())    // Uzum oxirgi marta qaytargan vaqt (lost aniqlash uchun)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, uzumOrderId, skuTitle])
+  @@index([storeId])
+  @@index([status])
+  @@index([returnedAt])
+  @@map("product_returns")
 }

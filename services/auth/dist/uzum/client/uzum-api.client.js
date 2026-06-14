@@ -511,6 +511,136 @@ let UzumApiClient = UzumApiClient_1 = class UzumApiClient {
         }
         return null;
     }
+    async postAction(apiKey, path, body, params) {
+        const client = this.buildClient(apiKey);
+        try {
+            const response = await client.post(path, body, { params, timeout: 12_000 });
+            return { ok: true, payload: response.data?.payload };
+        }
+        catch (err) {
+            const code = err?.response?.data?.errors?.[0]?.code || String(err?.response?.status || '');
+            const message = err?.response?.data?.errors?.[0]?.message || err?.message;
+            this.logger.warn(`POST ${path} failed: ${code} — ${message}`);
+            return { ok: false, error: message, code };
+        }
+    }
+    async cancelFbsOrder(storeId, apiKey, orderId, reason, comment) {
+        return this.postAction(apiKey, `/v1/fbs/order/${orderId}/cancel`, { reason, comment });
+    }
+    async setFbsOrderIdentifiers(storeId, apiKey, orderId, items) {
+        return this.postAction(apiKey, `/v1/fbs/order/${orderId}/identifier`, { items });
+    }
+    async getFbsReturnReasons(storeId, apiKey) {
+        const data = await this.executeWithRetry(storeId, apiKey, '/v1/fbs/order/return-reasons', 'GET', (client) => client.get('/v1/fbs/order/return-reasons'));
+        return data?.payload?.reasons || [];
+    }
+    async dbsOrderDelivering(storeId, apiKey, orderId) {
+        return this.postAction(apiKey, `/v1/dbs/order/${orderId}/delivering`);
+    }
+    async dbsOrderCompleted(storeId, apiKey, orderId, issueCode) {
+        return this.postAction(apiKey, `/v1/dbs/order/${orderId}/completed`, undefined, issueCode != null ? { issueCode } : undefined);
+    }
+    async dbsOrderRefund(storeId, apiKey, orderId) {
+        return this.postAction(apiKey, `/v1/dbs/order/${orderId}/refund`);
+    }
+    async sendPriceData(storeId, apiKey, shopId, productId, skuList) {
+        return this.postAction(apiKey, `/v1/product/${shopId}/sendPriceData`, { productId, skuList });
+    }
+    async getFbsInvoiceActPdf(storeId, apiKey, invoiceId) {
+        const data = await this.executeWithRetry(storeId, apiKey, `/v1/fbs/invoice/${invoiceId}/print`, 'GET', (client) => client.get(`/v1/fbs/invoice/${invoiceId}/print`));
+        return data?.payload?.document || null;
+    }
+    async getFbsInvoiceClosingDocsPdf(storeId, apiKey, invoiceId) {
+        const client = this.buildClient(apiKey);
+        try {
+            const response = await client.get(`/v1/fbs/invoice/${invoiceId}/closing-documents`, { timeout: 12_000 });
+            return response.data?.payload?.document || null;
+        }
+        catch (err) {
+            const code = err?.response?.data?.errors?.[0]?.code || err?.response?.status;
+            this.logger.warn(`closing-documents ${invoiceId} failed: ${code} — ${err?.message}`);
+            return null;
+        }
+    }
+    async createFbsInvoice(storeId, apiKey, body) {
+        return this.postAction(apiKey, '/v1/fbs/invoice', body);
+    }
+    async cancelFbsInvoice(storeId, apiKey, invoiceId) {
+        return this.postAction(apiKey, `/v1/fbs/invoice/${invoiceId}/cancel`);
+    }
+    async updateFbsInvoiceContent(storeId, apiKey, invoiceId, body) {
+        return this.postAction(apiKey, `/v1/fbs/invoice/${invoiceId}/update-content`, { invoiceId, ...body });
+    }
+    async getFbsInvoiceDropOffPoints(storeId, apiKey, customerOrderIds) {
+        const client = this.buildClient(apiKey);
+        const qs = customerOrderIds.map((id) => `customerOrderIds=${encodeURIComponent(String(id))}`).join('&');
+        try {
+            const response = await client.get(`/v1/fbs/invoice/dop/drop-off-points?${qs}`, { timeout: 12_000 });
+            return response.data?.payload?.dropOffPoints || [];
+        }
+        catch (err) {
+            this.logger.warn(`dropOffPoints failed: ${err?.message}`);
+            return [];
+        }
+    }
+    async getFbsInvoiceTimeSlots(storeId, apiKey, dopId, sellerOrderIds) {
+        const client = this.buildClient(apiKey);
+        const qs = [`dopId=${encodeURIComponent(dopId)}`, ...sellerOrderIds.map((id) => `sellerOrderIds=${encodeURIComponent(String(id))}`)].join('&');
+        try {
+            const response = await client.get(`/v1/fbs/invoice/dop/time-slot?${qs}`, { timeout: 12_000 });
+            return response.data?.payload?.timeSlots || [];
+        }
+        catch (err) {
+            this.logger.warn(`timeSlots failed: ${err?.message}`);
+            return [];
+        }
+    }
+    async updateFbsInvoiceDropOff(storeId, apiKey, body) {
+        return this.postAction(apiKey, '/v1/fbs/invoice/dop/time-slot', body);
+    }
+    async getSellerReturns(storeId, apiKey, shopId, params = {}) {
+        const { page = 0, size = 20 } = params;
+        const url = `/v1/shop/${shopId}/return?page=${page}&size=${Math.min(size, 50)}`;
+        try {
+            const data = await this.executeWithRetry(storeId, apiKey, `/v1/shop/${shopId}/return`, 'GET', (client) => client.get(url));
+            if (Array.isArray(data))
+                return data;
+            return data?.payload || [];
+        }
+        catch (err) {
+            this.logger.warn(`getSellerReturns failed: ${err?.message}`);
+            return [];
+        }
+    }
+    async getSellerReturnById(storeId, apiKey, shopId, returnId) {
+        const path = `/v1/return?returnId=${returnId}&page=0&size=50`;
+        try {
+            const data = await this.executeWithRetry(storeId, apiKey, '/v1/return', 'GET', (client) => client.get(path));
+            const arr = Array.isArray(data) ? data : (data?.payload || []);
+            const match = arr.find((r) => String(r?.id) === String(returnId));
+            return match || arr[0] || null;
+        }
+        catch (err) {
+            this.logger.warn(`getSellerReturnById ${returnId} failed: ${err?.message}`);
+            return null;
+        }
+    }
+    async getSellerInvoices(storeId, apiKey, params = {}) {
+        const { page = 0, size = 50 } = params;
+        const url = `/v1/invoice?page=${page}&size=${Math.min(size, 50)}`;
+        try {
+            const data = await this.executeWithRetry(storeId, apiKey, '/v1/invoice', 'GET', (client) => client.get(url));
+            return data?.payload || [];
+        }
+        catch (err) {
+            this.logger.warn(`getSellerInvoices failed: ${err?.message}`);
+            return [];
+        }
+    }
+    async getStocksV3(storeId, apiKey, page = 0, size = 50) {
+        const data = await this.executeWithRetry(storeId, apiKey, '/v3/fbs/sku/stocks', 'GET', (client) => client.get('/v3/fbs/sku/stocks', { params: { page, size: Math.min(size, 100) } }));
+        return { skuAmountList: data?.payload?.skuAmountList || [] };
+    }
     async validateConnection(storeId, apiKey) {
         try {
             const shops = await this.getShops(storeId, apiKey);

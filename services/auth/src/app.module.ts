@@ -17,6 +17,7 @@ import { FinanceModule } from './marketplace/finance/finance.module';
 import { AnalyticsModule } from './marketplace/analytics/analytics.module';
 import { InventoryModule } from './marketplace/inventory/inventory.module';
 import { FbsModule } from './marketplace/fbs/fbs.module';
+import { ReturnsModule } from './marketplace/returns/returns.module';
 import { TelegramModule } from './marketplace/telegram/telegram.module';
 import { SyncModule } from './sync/sync.module';
 
@@ -56,6 +57,7 @@ import { SyncModule } from './sync/sync.module';
     AnalyticsModule,
     InventoryModule,
     FbsModule,
+    ReturnsModule,
     TelegramModule,
     SyncModule,
   ],

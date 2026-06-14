@@ -1,5 +1,5 @@
 import { AuthService } from '../services/auth.service';
-import { SendOtpDto, VerifyOtpDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
+import { SendOtpDto, VerifyOtpDto, TelegramLoginDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
 export declare class AuthController {
     private readonly authService;
     constructor(authService: AuthService);
@@ -8,6 +8,11 @@ export declare class AuthController {
         expiresAt: Date;
     }>;
     verifyOtp(dto: VerifyOtpDto): Promise<{
+        user: any;
+        accessToken: string;
+        refreshToken: string;
+    }>;
+    telegram(dto: TelegramLoginDto): Promise<{
         user: any;
         accessToken: string;
         refreshToken: string;

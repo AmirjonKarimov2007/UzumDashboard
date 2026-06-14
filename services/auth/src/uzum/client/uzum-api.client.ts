@@ -983,6 +983,266 @@ export class UzumApiClient {
     return null;
   }
 
+  // ─── FBS/DBS order actions ──────────────────────────────────────────────
+
+  /** Generic POST helper for order/invoice mutations. Returns a normalized
+   *  result with the Uzum error code/message on failure (never throws). */
+  private async postAction(
+    apiKey: string,
+    path: string,
+    body?: any,
+    params?: Record<string, unknown>,
+  ): Promise<{ ok: boolean; payload?: any; error?: string; code?: string }> {
+    const client = this.buildClient(apiKey);
+    try {
+      const response = await client.post(path, body, { params, timeout: 12_000 });
+      return { ok: true, payload: response.data?.payload };
+    } catch (err: any) {
+      const code = err?.response?.data?.errors?.[0]?.code || String(err?.response?.status || '');
+      const message = err?.response?.data?.errors?.[0]?.message || err?.message;
+      this.logger.warn(`POST ${path} failed: ${code} — ${message}`);
+      return { ok: false, error: message, code };
+    }
+  }
+
+  /** Cancel an FBS order. `reason` is one of Uzum's cancel-reason enums
+   *  (OUT_OF_STOCK, OUT_OF_PACKAGE, OUT_OF_TIME, OTHER, …). */
+  async cancelFbsOrder(
+    storeId: string,
+    apiKey: string,
+    orderId: number | string,
+    reason: string,
+    comment?: string,
+  ): Promise<{ ok: boolean; error?: string; code?: string }> {
+    return this.postAction(apiKey, `/v1/fbs/order/${orderId}/cancel`, { reason, comment });
+  }
+
+  /** Bind identifiers (IMEI / ASL belgisi) to order-item positions in bulk. */
+  async setFbsOrderIdentifiers(
+    storeId: string,
+    apiKey: string,
+    orderId: number | string,
+    items: Array<{ orderItemId: number; values: string[] }>,
+  ): Promise<{ ok: boolean; payload?: any; error?: string }> {
+    return this.postAction(apiKey, `/v1/fbs/order/${orderId}/identifier`, { items });
+  }
+
+  /** List of valid return/cancel reasons. */
+  async getFbsReturnReasons(storeId: string, apiKey: string): Promise<any[]> {
+    const data = await this.executeWithRetry<{ payload: { reasons: any[] } }>(
+      storeId, apiKey, '/v1/fbs/order/return-reasons', 'GET',
+      (client) => client.get('/v1/fbs/order/return-reasons'),
+    );
+    return data?.payload?.reasons || [];
+  }
+
+  /** DBS: move a packed order into DELIVERING. */
+  async dbsOrderDelivering(storeId: string, apiKey: string, orderId: number | string) {
+    return this.postAction(apiKey, `/v1/dbs/order/${orderId}/delivering`);
+  }
+
+  /** DBS: confirm hand-off to customer (COMPLETED); issueCode if required. */
+  async dbsOrderCompleted(storeId: string, apiKey: string, orderId: number | string, issueCode?: number) {
+    return this.postAction(apiKey, `/v1/dbs/order/${orderId}/completed`, undefined, issueCode != null ? { issueCode } : undefined);
+  }
+
+  /** DBS: create a refund for a completed order. */
+  async dbsOrderRefund(storeId: string, apiKey: string, orderId: number | string) {
+    return this.postAction(apiKey, `/v1/dbs/order/${orderId}/refund`);
+  }
+
+  // ─── Product price ──────────────────────────────────────────────────────
+
+  /** Change SKU prices. Each item: skuId + fullPrice and/or sellPrice (so'm). */
+  async sendPriceData(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    productId: number,
+    skuList: Array<{ skuId: number; fullPrice?: number; sellPrice?: number; skuTitle?: string }>,
+  ): Promise<{ ok: boolean; error?: string; code?: string }> {
+    return this.postAction(apiKey, `/v1/product/${shopId}/sendPriceData`, { productId, skuList });
+  }
+
+  // ─── FBS Invoice: acts (PDF) ────────────────────────────────────────────
+
+  /** Supply act / waybill PDF (akt postavki) as base64. */
+  async getFbsInvoiceActPdf(storeId: string, apiKey: string, invoiceId: number | string): Promise<string | null> {
+    const data = await this.executeWithRetry<{ payload: { document: string } }>(
+      storeId, apiKey, `/v1/fbs/invoice/${invoiceId}/print`, 'GET',
+      (client) => client.get(`/v1/fbs/invoice/${invoiceId}/print`),
+    );
+    return data?.payload?.document || null;
+  }
+
+  /** Acceptance (closing) act PDF (akt priyomki) as base64. Only available once
+   *  the invoice reaches an accepted status. */
+  async getFbsInvoiceClosingDocsPdf(storeId: string, apiKey: string, invoiceId: number | string): Promise<string | null> {
+    const client = this.buildClient(apiKey);
+    try {
+      const response = await client.get(`/v1/fbs/invoice/${invoiceId}/closing-documents`, { timeout: 12_000 });
+      return response.data?.payload?.document || null;
+    } catch (err: any) {
+      const code = err?.response?.data?.errors?.[0]?.code || err?.response?.status;
+      this.logger.warn(`closing-documents ${invoiceId} failed: ${code} — ${err?.message}`);
+      return null;
+    }
+  }
+
+  // ─── FBS Invoice: create / update / cancel + drop-off & time-slots ───────
+
+  /** Create a supply invoice from a set of confirmed orders. */
+  async createFbsInvoice(
+    storeId: string,
+    apiKey: string,
+    body: { orderIds: number[]; dropOffPointUuid: string; timeSlotUuid: string; sellerId: number; idempotencyKey?: string },
+  ): Promise<{ ok: boolean; payload?: any; error?: string; code?: string }> {
+    return this.postAction(apiKey, '/v1/fbs/invoice', body);
+  }
+
+  /** Cancel a supply invoice. */
+  async cancelFbsInvoice(storeId: string, apiKey: string, invoiceId: number | string) {
+    return this.postAction(apiKey, `/v1/fbs/invoice/${invoiceId}/cancel`);
+  }
+
+  /** Update invoice content (add/remove an order). */
+  async updateFbsInvoiceContent(
+    storeId: string,
+    apiKey: string,
+    invoiceId: number | string,
+    body: { sellerId: number; customerOrderId: number; idempotencyKey?: string },
+  ) {
+    return this.postAction(apiKey, `/v1/fbs/invoice/${invoiceId}/update-content`, { invoiceId, ...body });
+  }
+
+  /** Drop-off points suitable for the given orders. */
+  async getFbsInvoiceDropOffPoints(storeId: string, apiKey: string, customerOrderIds: (number | string)[]): Promise<any[]> {
+    const client = this.buildClient(apiKey);
+    const qs = customerOrderIds.map((id) => `customerOrderIds=${encodeURIComponent(String(id))}`).join('&');
+    try {
+      const response = await client.get(`/v1/fbs/invoice/dop/drop-off-points?${qs}`, { timeout: 12_000 });
+      return response.data?.payload?.dropOffPoints || [];
+    } catch (err: any) {
+      this.logger.warn(`dropOffPoints failed: ${err?.message}`);
+      return [];
+    }
+  }
+
+  /** Available time-slots for a drop-off point + set of orders. */
+  async getFbsInvoiceTimeSlots(
+    storeId: string,
+    apiKey: string,
+    dopId: string,
+    sellerOrderIds: (number | string)[],
+  ): Promise<any[]> {
+    const client = this.buildClient(apiKey);
+    const qs = [`dopId=${encodeURIComponent(dopId)}`, ...sellerOrderIds.map((id) => `sellerOrderIds=${encodeURIComponent(String(id))}`)].join('&');
+    try {
+      const response = await client.get(`/v1/fbs/invoice/dop/time-slot?${qs}`, { timeout: 12_000 });
+      return response.data?.payload?.timeSlots || [];
+    } catch (err: any) {
+      this.logger.warn(`timeSlots failed: ${err?.message}`);
+      return [];
+    }
+  }
+
+  /** Update drop-off point + time-slot on an existing invoice. */
+  async updateFbsInvoiceDropOff(
+    storeId: string,
+    apiKey: string,
+    body: { orderIds: number[]; dropOffPointUuid: string; timeSlotUuid: string; sellerId: number; idempotencyKey?: string },
+  ) {
+    return this.postAction(apiKey, '/v1/fbs/invoice/dop/time-slot', body);
+  }
+
+  // ─── Returns (Qaytarishlar) ─────────────────────────────────────────────
+
+  /** Seller return invoices (nakladnoylar) — list without items.
+   *  Uzum bu endpointni ba'zi shoplarda massiv qilib, ba'zilarida {payload}
+   *  o'rab qaytaradi — ikkalasini ham qabul qilamiz. */
+  async getSellerReturns(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    params: { page?: number; size?: number } = {},
+  ): Promise<any[]> {
+    const { page = 0, size = 20 } = params;
+    const url = `/v1/shop/${shopId}/return?page=${page}&size=${Math.min(size, 50)}`;
+    try {
+      const data = await this.executeWithRetry<any>(
+        storeId, apiKey, `/v1/shop/${shopId}/return`, 'GET',
+        (client) => client.get(url),
+      );
+      if (Array.isArray(data)) return data;
+      return data?.payload || [];
+    } catch (err: any) {
+      this.logger.warn(`getSellerReturns failed: ${err?.message}`);
+      return [];
+    }
+  }
+
+  /** Single return invoice details including returnItems[] (the products returned).
+   *  Swagger: GET /v1/return?returnId=X — qaytarilgan mahsulotlar ro'yxatini
+   *  o'z ichiga olgan massiv qaytaradi (odatda bitta element). */
+  async getSellerReturnById(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    returnId: number | string,
+  ): Promise<any | null> {
+    const path = `/v1/return?returnId=${returnId}&page=0&size=50`;
+    try {
+      const data = await this.executeWithRetry<any>(
+        storeId, apiKey, '/v1/return', 'GET',
+        (client) => client.get(path),
+      );
+      const arr = Array.isArray(data) ? data : (data?.payload || []);
+      const match = arr.find((r: any) => String(r?.id) === String(returnId));
+      return match || arr[0] || null;
+    } catch (err: any) {
+      this.logger.warn(`getSellerReturnById ${returnId} failed: ${err?.message}`);
+      return null;
+    }
+  }
+
+  // ─── FBO supply invoices (v1/invoice with SKU list) ─────────────────────
+
+  /** Supply (FBO) invoices with their SKU composition. */
+  async getSellerInvoices(
+    storeId: string,
+    apiKey: string,
+    params: { page?: number; size?: number } = {},
+  ): Promise<any[]> {
+    const { page = 0, size = 50 } = params;
+    const url = `/v1/invoice?page=${page}&size=${Math.min(size, 50)}`;
+    try {
+      const data = await this.executeWithRetry<{ payload: any[] }>(
+        storeId, apiKey, '/v1/invoice', 'GET',
+        (client) => client.get(url),
+      );
+      return data?.payload || [];
+    } catch (err: any) {
+      this.logger.warn(`getSellerInvoices failed: ${err?.message}`);
+      return [];
+    }
+  }
+
+  // ─── Stocks (v3 paginated) ──────────────────────────────────────────────
+
+  /** Paginated FBS/DBS SKU stocks (v3 — replaces the deprecated v2 dump). */
+  async getStocksV3(
+    storeId: string,
+    apiKey: string,
+    page: number = 0,
+    size: number = 50,
+  ): Promise<{ skuAmountList: any[] }> {
+    const data = await this.executeWithRetry<{ payload: { skuAmountList: any[] } }>(
+      storeId, apiKey, '/v3/fbs/sku/stocks', 'GET',
+      (client) => client.get('/v3/fbs/sku/stocks', { params: { page, size: Math.min(size, 100) } }),
+    );
+    return { skuAmountList: data?.payload?.skuAmountList || [] };
+  }
+
   // ─── Validation ───────────────────────────────────────────────────────────
 
   async validateConnection(

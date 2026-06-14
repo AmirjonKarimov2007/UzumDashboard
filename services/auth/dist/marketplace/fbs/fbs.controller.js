@@ -48,6 +48,91 @@ __decorate([
     (0, class_transformer_1.Type)(() => StockUpdateItem),
     __metadata("design:type", Array)
 ], SetStocksDto.prototype, "updates", void 0);
+class CancelOrderDto {
+}
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CancelOrderDto.prototype, "reason", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CancelOrderDto.prototype, "comment", void 0);
+class IdentifierItem {
+}
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], IdentifierItem.prototype, "orderItemId", void 0);
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], IdentifierItem.prototype, "values", void 0);
+class SetIdentifiersDto {
+}
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ValidateNested)({ each: true }),
+    (0, class_transformer_1.Type)(() => IdentifierItem),
+    __metadata("design:type", Array)
+], SetIdentifiersDto.prototype, "items", void 0);
+class PriceSkuItem {
+}
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], PriceSkuItem.prototype, "skuId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], PriceSkuItem.prototype, "fullPrice", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], PriceSkuItem.prototype, "sellPrice", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], PriceSkuItem.prototype, "skuTitle", void 0);
+class UpdatePricesDto {
+}
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], UpdatePricesDto.prototype, "productId", void 0);
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ValidateNested)({ each: true }),
+    (0, class_transformer_1.Type)(() => PriceSkuItem),
+    __metadata("design:type", Array)
+], UpdatePricesDto.prototype, "skuList", void 0);
+class CreateInvoiceDto {
+}
+__decorate([
+    (0, class_validator_1.IsArray)(),
+    __metadata("design:type", Array)
+], CreateInvoiceDto.prototype, "orderIds", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateInvoiceDto.prototype, "dropOffPointUuid", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateInvoiceDto.prototype, "timeSlotUuid", void 0);
+__decorate([
+    (0, class_validator_1.IsNumber)(),
+    __metadata("design:type", Number)
+], CreateInvoiceDto.prototype, "sellerId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateInvoiceDto.prototype, "idempotencyKey", void 0);
 let FbsController = class FbsController {
     constructor(fbsService) {
         this.fbsService = fbsService;
@@ -69,6 +154,33 @@ let FbsController = class FbsController {
     confirmOrder(userId, storeId, orderId) {
         return this.fbsService.confirmOrder(userId, storeId, orderId);
     }
+    cancelOrder(userId, storeId, orderId, dto) {
+        return this.fbsService.cancelOrder(userId, storeId, orderId, dto.reason, dto.comment);
+    }
+    setIdentifiers(userId, storeId, orderId, dto) {
+        return this.fbsService.setOrderIdentifiers(userId, storeId, orderId, dto.items);
+    }
+    getReturnReasons(userId, storeId) {
+        return this.fbsService.getReturnReasons(userId, storeId);
+    }
+    dbsDelivering(userId, storeId, orderId) {
+        return this.fbsService.dbsDelivering(userId, storeId, orderId);
+    }
+    dbsCompleted(userId, storeId, orderId, issueCode) {
+        return this.fbsService.dbsCompleted(userId, storeId, orderId, issueCode ? parseInt(issueCode, 10) : undefined);
+    }
+    dbsRefund(userId, storeId, orderId) {
+        return this.fbsService.dbsRefund(userId, storeId, orderId);
+    }
+    updatePrices(userId, storeId, dto) {
+        return this.fbsService.updatePrices(userId, storeId, dto.productId, dto.skuList);
+    }
+    getReturns(userId, storeId, page, size, returnId) {
+        return this.fbsService.getReturns(userId, storeId, { page, size, returnId });
+    }
+    getSupplyInvoices(userId, storeId, page, size) {
+        return this.fbsService.getSupplyInvoices(userId, storeId, page, size);
+    }
     getInvoices(userId, storeId, statusesParam, page, size) {
         const statuses = statusesParam ? statusesParam.split(',') : undefined;
         return this.fbsService.getInvoices(userId, storeId, statuses, page, size);
@@ -78,6 +190,36 @@ let FbsController = class FbsController {
     }
     getInvoiceOrders(userId, storeId, invoiceId) {
         return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
+    }
+    async getInvoiceAct(userId, storeId, invoiceId, res) {
+        const buffer = await this.fbsService.getInvoiceActPdf(userId, storeId, invoiceId);
+        if (!buffer)
+            throw new common_1.NotFoundException(`Ta'minlash #${invoiceId} akti mavjud emas`);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="act_${invoiceId}.pdf"`);
+        res.send(buffer);
+    }
+    async getInvoiceClosing(userId, storeId, invoiceId, res) {
+        const buffer = await this.fbsService.getInvoiceClosingPdf(userId, storeId, invoiceId);
+        if (!buffer)
+            throw new common_1.NotFoundException(`Ta'minlash #${invoiceId} qabul akti mavjud emas`);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="closing_${invoiceId}.pdf"`);
+        res.send(buffer);
+    }
+    cancelInvoice(userId, storeId, invoiceId) {
+        return this.fbsService.cancelInvoice(userId, storeId, invoiceId);
+    }
+    createInvoice(userId, storeId, dto) {
+        return this.fbsService.createInvoice(userId, storeId, dto);
+    }
+    getDropOffPoints(userId, storeId, orderIds) {
+        const ids = (orderIds || '').split(',').filter(Boolean);
+        return this.fbsService.getInvoiceDropOffPoints(userId, storeId, ids);
+    }
+    getTimeSlots(userId, storeId, dopId, orderIds) {
+        const ids = (orderIds || '').split(',').filter(Boolean);
+        return this.fbsService.getInvoiceTimeSlots(userId, storeId, dopId, ids);
     }
     getProductAnalytics(userId, storeId, force) {
         return this.fbsService.getProductAnalytics(userId, storeId, force === '1' || force === 'true');
@@ -154,6 +296,92 @@ __decorate([
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "confirmOrder", null);
 __decorate([
+    (0, common_1.Post)('orders/:orderId/cancel'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('orderId')),
+    __param(3, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, CancelOrderDto]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "cancelOrder", null);
+__decorate([
+    (0, common_1.Post)('orders/:orderId/identifiers'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('orderId')),
+    __param(3, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, SetIdentifiersDto]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "setIdentifiers", null);
+__decorate([
+    (0, common_1.Get)('return-reasons'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getReturnReasons", null);
+__decorate([
+    (0, common_1.Post)('dbs/orders/:orderId/delivering'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('orderId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "dbsDelivering", null);
+__decorate([
+    (0, common_1.Post)('dbs/orders/:orderId/completed'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('orderId')),
+    __param(3, (0, common_1.Query)('issueCode')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "dbsCompleted", null);
+__decorate([
+    (0, common_1.Post)('dbs/orders/:orderId/refund'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('orderId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "dbsRefund", null);
+__decorate([
+    (0, common_1.Post)('products/prices'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, UpdatePricesDto]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "updatePrices", null);
+__decorate([
+    (0, common_1.Get)('returns'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('page', new common_1.DefaultValuePipe(0), common_1.ParseIntPipe)),
+    __param(3, (0, common_1.Query)('size', new common_1.DefaultValuePipe(50), common_1.ParseIntPipe)),
+    __param(4, (0, common_1.Query)('returnId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Number, Number, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getReturns", null);
+__decorate([
+    (0, common_1.Get)('supply-invoices'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('page', new common_1.DefaultValuePipe(0), common_1.ParseIntPipe)),
+    __param(3, (0, common_1.Query)('size', new common_1.DefaultValuePipe(50), common_1.ParseIntPipe)),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Number, Number]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getSupplyInvoices", null);
+__decorate([
     (0, common_1.Get)('invoices'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
     __param(1, (0, common_1.Param)('storeId')),
@@ -182,6 +410,63 @@ __decorate([
     __metadata("design:paramtypes", [String, String, String]),
     __metadata("design:returntype", void 0)
 ], FbsController.prototype, "getInvoiceOrders", null);
+__decorate([
+    (0, common_1.Get)('invoices/:invoiceId/act'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('invoiceId')),
+    __param(3, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], FbsController.prototype, "getInvoiceAct", null);
+__decorate([
+    (0, common_1.Get)('invoices/:invoiceId/closing-documents'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('invoiceId')),
+    __param(3, (0, common_1.Res)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, Object]),
+    __metadata("design:returntype", Promise)
+], FbsController.prototype, "getInvoiceClosing", null);
+__decorate([
+    (0, common_1.Post)('invoices/:invoiceId/cancel'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Param)('invoiceId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "cancelInvoice", null);
+__decorate([
+    (0, common_1.Post)('invoices'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, CreateInvoiceDto]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "createInvoice", null);
+__decorate([
+    (0, common_1.Get)('invoices/dop/drop-off-points'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('orderIds')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getDropOffPoints", null);
+__decorate([
+    (0, common_1.Get)('invoices/dop/time-slots'),
+    __param(0, (0, current_user_decorator_1.CurrentUser)('id')),
+    __param(1, (0, common_1.Param)('storeId')),
+    __param(2, (0, common_1.Query)('dopId')),
+    __param(3, (0, common_1.Query)('orderIds')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, String, String]),
+    __metadata("design:returntype", void 0)
+], FbsController.prototype, "getTimeSlots", null);
 __decorate([
     (0, common_1.Get)('products/analytics'),
     __param(0, (0, current_user_decorator_1.CurrentUser)('id')),

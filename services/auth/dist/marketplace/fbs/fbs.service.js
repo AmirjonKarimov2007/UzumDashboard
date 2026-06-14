@@ -28,6 +28,7 @@ let FbsService = FbsService_1 = class FbsService {
         this.productAnalyticsCache = new Map();
         this.PRODUCT_ANALYTICS_TTL_MS = 5 * 60 * 1000;
         this.countsInflight = new Map();
+        this.returnReasonsCache = new Map();
         this.stockMetaCache = new Map();
         this.STOCK_META_TTL_MS = 5 * 60 * 1000;
     }
@@ -139,9 +140,99 @@ let FbsService = FbsService_1 = class FbsService {
     async confirmOrder(userId, storeId, orderId) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
         const result = await this.uzumClient.confirmFbsOrder(storeId, apiKey, orderId);
+        this.expireCounts();
+        return result;
+    }
+    expireCounts() {
         for (const entry of this.countsCache.values())
             entry.expiresAt = 0;
+    }
+    async cancelOrder(userId, storeId, orderId, reason, comment) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const result = await this.uzumClient.cancelFbsOrder(storeId, apiKey, orderId, reason, comment);
+        this.expireCounts();
         return result;
+    }
+    async setOrderIdentifiers(userId, storeId, orderId, items) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        return this.uzumClient.setFbsOrderIdentifiers(storeId, apiKey, orderId, items);
+    }
+    async getReturnReasons(userId, storeId) {
+        const cached = this.returnReasonsCache.get(storeId);
+        if (cached && Date.now() - cached.fetchedAt < 60 * 60 * 1000)
+            return cached.data;
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const data = await this.uzumClient.getFbsReturnReasons(storeId, apiKey);
+        this.returnReasonsCache.set(storeId, { fetchedAt: Date.now(), data });
+        return data;
+    }
+    async dbsDelivering(userId, storeId, orderId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const r = await this.uzumClient.dbsOrderDelivering(storeId, apiKey, orderId);
+        this.expireCounts();
+        return r;
+    }
+    async dbsCompleted(userId, storeId, orderId, issueCode) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const r = await this.uzumClient.dbsOrderCompleted(storeId, apiKey, orderId, issueCode);
+        this.expireCounts();
+        return r;
+    }
+    async dbsRefund(userId, storeId, orderId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const r = await this.uzumClient.dbsOrderRefund(storeId, apiKey, orderId);
+        this.expireCounts();
+        return r;
+    }
+    async updatePrices(userId, storeId, productId, skuList) {
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const result = await this.uzumClient.sendPriceData(storeId, apiKey, uzumShopId, productId, skuList);
+        if (result.ok) {
+            this.productsCache.clear();
+            this.productAnalyticsCache.delete(storeId);
+        }
+        return result;
+    }
+    async getInvoiceActPdf(userId, storeId, invoiceId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const base64 = await this.uzumClient.getFbsInvoiceActPdf(storeId, apiKey, invoiceId);
+        return base64 ? Buffer.from(base64, 'base64') : null;
+    }
+    async getInvoiceClosingPdf(userId, storeId, invoiceId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const base64 = await this.uzumClient.getFbsInvoiceClosingDocsPdf(storeId, apiKey, invoiceId);
+        return base64 ? Buffer.from(base64, 'base64') : null;
+    }
+    async cancelInvoice(userId, storeId, invoiceId) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        return this.uzumClient.cancelFbsInvoice(storeId, apiKey, invoiceId);
+    }
+    async getInvoiceDropOffPoints(userId, storeId, orderIds) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        return this.uzumClient.getFbsInvoiceDropOffPoints(storeId, apiKey, orderIds);
+    }
+    async getInvoiceTimeSlots(userId, storeId, dopId, orderIds) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        return this.uzumClient.getFbsInvoiceTimeSlots(storeId, apiKey, dopId, orderIds);
+    }
+    async createInvoice(userId, storeId, body) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const r = await this.uzumClient.createFbsInvoice(storeId, apiKey, body);
+        this.expireCounts();
+        return r;
+    }
+    async getReturns(userId, storeId, params = {}) {
+        const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const { returnId, page = 0, size = 50 } = params;
+        const returns = returnId
+            ? [await this.uzumClient.getSellerReturnById(storeId, apiKey, uzumShopId, returnId)].filter(Boolean)
+            : await this.uzumClient.getSellerReturns(storeId, apiKey, uzumShopId, { page, size });
+        return { returns };
+    }
+    async getSupplyInvoices(userId, storeId, page = 0, size = 50) {
+        const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+        const invoices = await this.uzumClient.getSellerInvoices(storeId, apiKey, { page, size });
+        return { invoices };
     }
     async getInvoices(userId, storeId, statuses, page = 0, size = 20) {
         const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);

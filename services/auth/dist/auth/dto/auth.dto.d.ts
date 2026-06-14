@@ -12,6 +12,16 @@ export declare class VerifyOtpDto {
     ipAddress?: string;
     userAgent?: string;
 }
+export declare class TelegramLoginDto {
+    initData: string;
+    device?: {
+        type?: string;
+        os?: string;
+        browser?: string;
+    };
+    ipAddress?: string;
+    userAgent?: string;
+}
 export declare class RefreshTokenDto {
     refreshToken: string;
 }

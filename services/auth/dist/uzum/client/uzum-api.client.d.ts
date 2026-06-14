@@ -209,6 +209,105 @@ export declare class UzumApiClient {
     getFbsInvoiceOrders(storeId: string, apiKey: string, invoiceId: number | string): Promise<any[]>;
     getFbsLabelPdf(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
     getFbsLabelPdfFast(storeId: string, apiKey: string, orderId: number | string, size?: 'LARGE' | 'SMALL'): Promise<string | null>;
+    private postAction;
+    cancelFbsOrder(storeId: string, apiKey: string, orderId: number | string, reason: string, comment?: string): Promise<{
+        ok: boolean;
+        error?: string;
+        code?: string;
+    }>;
+    setFbsOrderIdentifiers(storeId: string, apiKey: string, orderId: number | string, items: Array<{
+        orderItemId: number;
+        values: string[];
+    }>): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+    }>;
+    getFbsReturnReasons(storeId: string, apiKey: string): Promise<any[]>;
+    dbsOrderDelivering(storeId: string, apiKey: string, orderId: number | string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    dbsOrderCompleted(storeId: string, apiKey: string, orderId: number | string, issueCode?: number): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    dbsOrderRefund(storeId: string, apiKey: string, orderId: number | string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    sendPriceData(storeId: string, apiKey: string, shopId: string | number, productId: number, skuList: Array<{
+        skuId: number;
+        fullPrice?: number;
+        sellPrice?: number;
+        skuTitle?: string;
+    }>): Promise<{
+        ok: boolean;
+        error?: string;
+        code?: string;
+    }>;
+    getFbsInvoiceActPdf(storeId: string, apiKey: string, invoiceId: number | string): Promise<string | null>;
+    getFbsInvoiceClosingDocsPdf(storeId: string, apiKey: string, invoiceId: number | string): Promise<string | null>;
+    createFbsInvoice(storeId: string, apiKey: string, body: {
+        orderIds: number[];
+        dropOffPointUuid: string;
+        timeSlotUuid: string;
+        sellerId: number;
+        idempotencyKey?: string;
+    }): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    cancelFbsInvoice(storeId: string, apiKey: string, invoiceId: number | string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    updateFbsInvoiceContent(storeId: string, apiKey: string, invoiceId: number | string, body: {
+        sellerId: number;
+        customerOrderId: number;
+        idempotencyKey?: string;
+    }): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    getFbsInvoiceDropOffPoints(storeId: string, apiKey: string, customerOrderIds: (number | string)[]): Promise<any[]>;
+    getFbsInvoiceTimeSlots(storeId: string, apiKey: string, dopId: string, sellerOrderIds: (number | string)[]): Promise<any[]>;
+    updateFbsInvoiceDropOff(storeId: string, apiKey: string, body: {
+        orderIds: number[];
+        dropOffPointUuid: string;
+        timeSlotUuid: string;
+        sellerId: number;
+        idempotencyKey?: string;
+    }): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    getSellerReturns(storeId: string, apiKey: string, shopId: string | number, params?: {
+        page?: number;
+        size?: number;
+    }): Promise<any[]>;
+    getSellerReturnById(storeId: string, apiKey: string, shopId: string | number, returnId: number | string): Promise<any | null>;
+    getSellerInvoices(storeId: string, apiKey: string, params?: {
+        page?: number;
+        size?: number;
+    }): Promise<any[]>;
+    getStocksV3(storeId: string, apiKey: string, page?: number, size?: number): Promise<{
+        skuAmountList: any[];
+    }>;
     validateConnection(storeId: string, apiKey: string): Promise<{
         valid: boolean;
         shops: UzumShop[];

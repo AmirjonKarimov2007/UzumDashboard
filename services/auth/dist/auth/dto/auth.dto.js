@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LogoutDto = exports.RefreshTokenDto = exports.VerifyOtpDto = exports.SendOtpDto = void 0;
+exports.LogoutDto = exports.RefreshTokenDto = exports.TelegramLoginDto = exports.VerifyOtpDto = exports.SendOtpDto = void 0;
 const class_validator_1 = require("class-validator");
 class SendOtpDto {
 }
@@ -35,6 +35,14 @@ __decorate([
     (0, class_validator_1.MinLength)(4),
     __metadata("design:type", String)
 ], VerifyOtpDto.prototype, "code", void 0);
+class TelegramLoginDto {
+}
+exports.TelegramLoginDto = TelegramLoginDto;
+__decorate([
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], TelegramLoginDto.prototype, "initData", void 0);
 class RefreshTokenDto {
 }
 exports.RefreshTokenDto = RefreshTokenDto;

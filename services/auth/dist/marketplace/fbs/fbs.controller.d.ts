@@ -11,6 +11,34 @@ declare class StockUpdateItem {
 declare class SetStocksDto {
     updates: StockUpdateItem[];
 }
+declare class CancelOrderDto {
+    reason: string;
+    comment?: string;
+}
+declare class IdentifierItem {
+    orderItemId: number;
+    values: string[];
+}
+declare class SetIdentifiersDto {
+    items: IdentifierItem[];
+}
+declare class PriceSkuItem {
+    skuId: number;
+    fullPrice?: number;
+    sellPrice?: number;
+    skuTitle?: string;
+}
+declare class UpdatePricesDto {
+    productId: number;
+    skuList: PriceSkuItem[];
+}
+declare class CreateInvoiceDto {
+    orderIds: number[];
+    dropOffPointUuid: string;
+    timeSlotUuid: string;
+    sellerId: number;
+    idempotencyKey?: string;
+}
 export declare class FbsController {
     private readonly fbsService;
     constructor(fbsService: FbsService);
@@ -28,6 +56,46 @@ export declare class FbsController {
         order?: any;
         error?: string;
     }>;
+    cancelOrder(userId: string, storeId: string, orderId: string, dto: CancelOrderDto): Promise<{
+        ok: boolean;
+        error?: string;
+        code?: string;
+    }>;
+    setIdentifiers(userId: string, storeId: string, orderId: string, dto: SetIdentifiersDto): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+    }>;
+    getReturnReasons(userId: string, storeId: string): Promise<any[]>;
+    dbsDelivering(userId: string, storeId: string, orderId: string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    dbsCompleted(userId: string, storeId: string, orderId: string, issueCode?: string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    dbsRefund(userId: string, storeId: string, orderId: string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    updatePrices(userId: string, storeId: string, dto: UpdatePricesDto): Promise<{
+        ok: boolean;
+        error?: string;
+        code?: string;
+    }>;
+    getReturns(userId: string, storeId: string, page: number, size: number, returnId?: string): Promise<{
+        returns: any[];
+    }>;
+    getSupplyInvoices(userId: string, storeId: string, page: number, size: number): Promise<{
+        invoices: any[];
+    }>;
     getInvoices(userId: string, storeId: string, statusesParam?: string, page?: number, size?: number): Promise<{
         invoices: any[];
     }>;
@@ -35,6 +103,22 @@ export declare class FbsController {
     getInvoiceOrders(userId: string, storeId: string, invoiceId: string): Promise<{
         orders: any[];
     }>;
+    getInvoiceAct(userId: string, storeId: string, invoiceId: string, res: Response): Promise<void>;
+    getInvoiceClosing(userId: string, storeId: string, invoiceId: string, res: Response): Promise<void>;
+    cancelInvoice(userId: string, storeId: string, invoiceId: string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    createInvoice(userId: string, storeId: string, dto: CreateInvoiceDto): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    getDropOffPoints(userId: string, storeId: string, orderIds: string): Promise<any[]>;
+    getTimeSlots(userId: string, storeId: string, dopId: string, orderIds: string): Promise<any[]>;
     getProductAnalytics(userId: string, storeId: string, force?: string): Promise<any>;
     getLiveProducts(userId: string, storeId: string, page: number, size: number, filter?: string, searchQuery?: string, sortBy?: string, order?: 'asc' | 'desc'): Promise<any>;
     getLiveFinanceOrders(userId: string, storeId: string, page: number, size: number, dateFrom?: string, dateTo?: string): Promise<{

@@ -192,6 +192,8 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
         }
         const logistics = [];
         const fines = [];
+        const marketing = [];
+        const other = [];
         const refunds = [];
         for (const e of payments) {
             const unitPrice = Math.abs(Number(e.paymentPrice ?? 0));
@@ -211,22 +213,41 @@ let FinanceSyncService = FinanceSyncService_1 = class FinanceSyncService {
                 continue;
             }
             const src = source.toLowerCase();
+            const blob = `${src} ${description.toLowerCase()}`;
+            const isMarketing = src.includes('marketing') ||
+                blob.includes("targ'ib") || blob.includes('targ‘ib') || blob.includes('targib') ||
+                blob.includes('reklam') || blob.includes('реклам') ||
+                blob.includes('продвиж') || blob.includes('promotion') || blob.includes('advertis');
             if (src.includes('logistik')) {
                 logistics.push(item);
             }
             else if (src.includes('uzum market') || src.includes('ombor')) {
                 fines.push(item);
             }
+            else if (isMarketing) {
+                marketing.push(item);
+            }
+            else {
+                other.push(item);
+            }
         }
         const logisticsTotal = logistics.reduce((s, x) => s + x.amount, 0);
         const finesTotal = fines.reduce((s, x) => s + x.amount, 0);
+        const marketingTotal = marketing.reduce((s, x) => s + x.amount, 0);
+        const otherTotal = other.reduce((s, x) => s + x.amount, 0);
         const refundsTotal = refunds.reduce((s, x) => s + x.amount, 0);
         const payload = {
             logisticsTotal,
             logisticsCount: logistics.length,
             finesTotal,
             finesCount: fines.length,
-            combined: logisticsTotal + finesTotal,
+            marketingTotal,
+            marketingCount: marketing.length,
+            marketing,
+            otherTotal,
+            otherCount: other.length,
+            other,
+            combined: logisticsTotal + finesTotal + marketingTotal + otherTotal,
             refundsTotal,
             refundsCount: refunds.length,
             totalExpenses: payments.length,

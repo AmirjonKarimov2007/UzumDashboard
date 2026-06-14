@@ -42,6 +42,75 @@ class SetStocksDto {
   updates!: StockUpdateItem[];
 }
 
+class CancelOrderDto {
+  @IsString()
+  reason!: string;
+
+  @IsOptional()
+  @IsString()
+  comment?: string;
+}
+
+class IdentifierItem {
+  @IsNumber()
+  orderItemId!: number;
+
+  @IsArray()
+  values!: string[];
+}
+
+class SetIdentifiersDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => IdentifierItem)
+  items!: IdentifierItem[];
+}
+
+class PriceSkuItem {
+  @IsNumber()
+  skuId!: number;
+
+  @IsOptional()
+  @IsNumber()
+  fullPrice?: number;
+
+  @IsOptional()
+  @IsNumber()
+  sellPrice?: number;
+
+  @IsOptional()
+  @IsString()
+  skuTitle?: string;
+}
+
+class UpdatePricesDto {
+  @IsNumber()
+  productId!: number;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => PriceSkuItem)
+  skuList!: PriceSkuItem[];
+}
+
+class CreateInvoiceDto {
+  @IsArray()
+  orderIds!: number[];
+
+  @IsString()
+  dropOffPointUuid!: string;
+
+  @IsString()
+  timeSlotUuid!: string;
+
+  @IsNumber()
+  sellerId!: number;
+
+  @IsOptional()
+  @IsString()
+  idempotencyKey?: string;
+}
+
 @Controller('marketplace/stores/:storeId/fbs')
 @UseGuards(JwtAuthGuard)
 export class FbsController {
@@ -102,6 +171,103 @@ export class FbsController {
     return this.fbsService.confirmOrder(userId, storeId, orderId);
   }
 
+  /** Cancel an order with a reason */
+  @Post('orders/:orderId/cancel')
+  cancelOrder(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+    @Body() dto: CancelOrderDto,
+  ) {
+    return this.fbsService.cancelOrder(userId, storeId, orderId, dto.reason, dto.comment);
+  }
+
+  /** Bind identifiers (IMEI / ASL belgisi) to order items */
+  @Post('orders/:orderId/identifiers')
+  setIdentifiers(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+    @Body() dto: SetIdentifiersDto,
+  ) {
+    return this.fbsService.setOrderIdentifiers(userId, storeId, orderId, dto.items);
+  }
+
+  /** Valid cancel/return reasons (cached) */
+  @Get('return-reasons')
+  getReturnReasons(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+  ) {
+    return this.fbsService.getReturnReasons(userId, storeId);
+  }
+
+  // ─── DBS order actions ────────────────────────────────────────────────
+
+  @Post('dbs/orders/:orderId/delivering')
+  dbsDelivering(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fbsService.dbsDelivering(userId, storeId, orderId);
+  }
+
+  @Post('dbs/orders/:orderId/completed')
+  dbsCompleted(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+    @Query('issueCode') issueCode?: string,
+  ) {
+    return this.fbsService.dbsCompleted(userId, storeId, orderId, issueCode ? parseInt(issueCode, 10) : undefined);
+  }
+
+  @Post('dbs/orders/:orderId/refund')
+  dbsRefund(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fbsService.dbsRefund(userId, storeId, orderId);
+  }
+
+  // ─── Product price ────────────────────────────────────────────────────
+
+  /** Change SKU prices for a product */
+  @Post('products/prices')
+  updatePrices(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: UpdatePricesDto,
+  ) {
+    return this.fbsService.updatePrices(userId, storeId, dto.productId, dto.skuList);
+  }
+
+  // ─── Returns (Qaytarishlar) ───────────────────────────────────────────
+
+  @Get('returns')
+  getReturns(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('page', new DefaultValuePipe(0), ParseIntPipe) page: number,
+    @Query('size', new DefaultValuePipe(50), ParseIntPipe) size: number,
+    @Query('returnId') returnId?: string,
+  ) {
+    return this.fbsService.getReturns(userId, storeId, { page, size, returnId });
+  }
+
+  /** FBO supply invoices with SKU composition */
+  @Get('supply-invoices')
+  getSupplyInvoices(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('page', new DefaultValuePipe(0), ParseIntPipe) page: number,
+    @Query('size', new DefaultValuePipe(50), ParseIntPipe) size: number,
+  ) {
+    return this.fbsService.getSupplyInvoices(userId, storeId, page, size);
+  }
+
   // ─── Invoices (Ta'minlashlar) ────────────────────────────────────────
 
   @Get('invoices')
@@ -132,6 +298,79 @@ export class FbsController {
     @Param('invoiceId') invoiceId: string,
   ) {
     return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
+  }
+
+  /** Supply act PDF (yuborish dalolatnomasi) — streams the official Uzum PDF */
+  @Get('invoices/:invoiceId/act')
+  async getInvoiceAct(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.fbsService.getInvoiceActPdf(userId, storeId, invoiceId);
+    if (!buffer) throw new NotFoundException(`Ta'minlash #${invoiceId} akti mavjud emas`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="act_${invoiceId}.pdf"`);
+    res.send(buffer);
+  }
+
+  /** Acceptance (closing) act PDF (qabul akti) — only after acceptance */
+  @Get('invoices/:invoiceId/closing-documents')
+  async getInvoiceClosing(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.fbsService.getInvoiceClosingPdf(userId, storeId, invoiceId);
+    if (!buffer) throw new NotFoundException(`Ta'minlash #${invoiceId} qabul akti mavjud emas`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="closing_${invoiceId}.pdf"`);
+    res.send(buffer);
+  }
+
+  /** Cancel a supply invoice */
+  @Post('invoices/:invoiceId/cancel')
+  cancelInvoice(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.cancelInvoice(userId, storeId, invoiceId);
+  }
+
+  /** Create a supply invoice from confirmed orders */
+  @Post('invoices')
+  createInvoice(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: CreateInvoiceDto,
+  ) {
+    return this.fbsService.createInvoice(userId, storeId, dto);
+  }
+
+  /** Drop-off points suitable for a set of orders */
+  @Get('invoices/dop/drop-off-points')
+  getDropOffPoints(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('orderIds') orderIds: string,
+  ) {
+    const ids = (orderIds || '').split(',').filter(Boolean);
+    return this.fbsService.getInvoiceDropOffPoints(userId, storeId, ids);
+  }
+
+  /** Time-slots for a drop-off point + set of orders */
+  @Get('invoices/dop/time-slots')
+  getTimeSlots(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('dopId') dopId: string,
+    @Query('orderIds') orderIds: string,
+  ) {
+    const ids = (orderIds || '').split(',').filter(Boolean);
+    return this.fbsService.getInvoiceTimeSlots(userId, storeId, dopId, ids);
   }
 
   /** Full product-level analytics (aggregated, cached 5 min) */

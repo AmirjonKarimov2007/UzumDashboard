@@ -13,6 +13,7 @@ exports.AuthService = void 0;
 const common_1 = require("@nestjs/common");
 const jwt_1 = require("@nestjs/jwt");
 const config_1 = require("@nestjs/config");
+const crypto = require("crypto");
 const prisma_service_1 = require("../../common/database/prisma.service");
 const otp_service_1 = require("../../otp/otp.service");
 const sessions_service_1 = require("../../sessions/sessions.service");
@@ -124,6 +125,106 @@ let AuthService = class AuthService {
                 name: userWithStores.name,
                 avatar: userWithStores.avatar,
                 stores: userWithStores.stores,
+            },
+            accessToken,
+            refreshToken,
+        };
+    }
+    async loginWithTelegram(dto) {
+        const tgUser = this.validateTelegramInitData(dto.initData);
+        if (!tgUser?.id) {
+            throw new common_1.UnauthorizedException('Telegram maʼlumotlari notoʻgʻri');
+        }
+        const link = await this.prisma.telegramUser.findFirst({
+            where: { chatId: String(tgUser.id), isActive: true },
+            include: { user: true },
+        });
+        if (!link) {
+            throw new common_1.NotFoundException('telegram_not_linked');
+        }
+        if (!link.user.isActive) {
+            throw new common_1.UnauthorizedException('Account is deactivated');
+        }
+        const storeCount = await this.prisma.store.count({ where: { userId: link.userId } });
+        if (storeCount === 0) {
+            await this.prisma.store.create({
+                data: { userId: link.userId, name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' },
+            });
+        }
+        await this.prisma.auditLog.create({
+            data: {
+                action: 'USER_LOGGED_IN',
+                userId: link.userId,
+                entity: 'User',
+                entityId: link.userId,
+                metadata: { via: 'telegram', telegramId: String(tgUser.id) },
+            },
+        });
+        return this.finalizeLogin(link.userId, {
+            device: dto.device ?? { type: 'telegram' },
+            ipAddress: dto.ipAddress,
+            userAgent: dto.userAgent,
+        });
+    }
+    validateTelegramInitData(initData) {
+        const botToken = this.config.get('TELEGRAM_BOT_TOKEN') || process.env.TELEGRAM_BOT_TOKEN;
+        if (!botToken || !initData)
+            return null;
+        try {
+            const params = new URLSearchParams(initData);
+            const hash = params.get('hash');
+            if (!hash)
+                return null;
+            params.delete('hash');
+            const dataCheckString = [...params.entries()]
+                .map(([k, v]) => `${k}=${v}`)
+                .sort()
+                .join('\n');
+            const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+            const computed = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+            if (computed !== hash)
+                return null;
+            const authDate = Number(params.get('auth_date') || 0);
+            if (authDate && Date.now() / 1000 - authDate > 86_400)
+                return null;
+            const userJson = params.get('user');
+            return userJson ? JSON.parse(userJson) : null;
+        }
+        catch {
+            return null;
+        }
+    }
+    async finalizeLogin(userId, meta) {
+        const user = await this.prisma.user.findUnique({
+            where: { id: userId },
+            include: { stores: true },
+        });
+        if (!user)
+            throw new common_1.UnauthorizedException('User not found');
+        const { accessToken, refreshToken } = await this.generateTokens(user);
+        await this.sessionService.createSession({
+            userId: user.id,
+            token: refreshToken,
+            device: meta.device,
+            ipAddress: meta.ipAddress,
+            userAgent: meta.userAgent,
+        });
+        await this.prisma.refreshToken.create({
+            data: {
+                token: refreshToken,
+                userId: user.id,
+                expiresAt: new Date(Date.now() +
+                    this.parseDuration(this.config.get('jwt.refreshTokenExpiresIn') ?? '7d')),
+            },
+        });
+        return {
+            user: {
+                id: user.id,
+                phone: user.phone,
+                email: user.email,
+                name: user.name,
+                avatar: user.avatar,
+                stores: user.stores,
             },
             accessToken,
             refreshToken,

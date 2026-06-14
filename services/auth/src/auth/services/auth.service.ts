@@ -3,9 +3,11 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as crypto from 'crypto';
 import { PrismaService } from '../../common/database/prisma.service';
 import { OtpService } from '../../otp/otp.service';
 import { SessionService } from '../../sessions/sessions.service';
@@ -13,6 +15,7 @@ import { SmsService } from '../../sms/sms.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
+  TelegramLoginDto,
   RefreshTokenDto,
   LogoutDto,
 } from '../dto/auth.dto';
@@ -172,6 +175,134 @@ export class AuthService {
         name: userWithStores!.name,
         avatar: userWithStores!.avatar,
         stores: userWithStores!.stores,
+      },
+      accessToken,
+      refreshToken,
+    };
+  }
+
+  /**
+   * Telegram WebApp orqali login — parol/OTP so'ramaydi.
+   * WebApp'dan kelgan `initData` HMAC bilan tekshiriladi, telegram user id
+   * orqali bog'langan akkaunt topiladi (bot'da telefon ulashgan bo'lsa) va
+   * to'g'ridan-to'g'ri token beriladi.
+   */
+  async loginWithTelegram(dto: TelegramLoginDto): Promise<{
+    user: any;
+    accessToken: string;
+    refreshToken: string;
+  }> {
+    const tgUser = this.validateTelegramInitData(dto.initData);
+    if (!tgUser?.id) {
+      throw new UnauthorizedException('Telegram maʼlumotlari notoʻgʻri');
+    }
+
+    // Bot'da telefon ulashganda saqlangan bog'lanish (chatId === telegram user id)
+    const link = await this.prisma.telegramUser.findFirst({
+      where: { chatId: String(tgUser.id), isActive: true },
+      include: { user: true },
+    });
+    if (!link) {
+      // Telefon hali botga ulanmagan — frontend kontakt ulashishni so'raydi
+      throw new NotFoundException('telegram_not_linked');
+    }
+    if (!link.user.isActive) {
+      throw new UnauthorizedException('Account is deactivated');
+    }
+
+    // Kamida bitta do'kon bo'lsin (idempotent)
+    const storeCount = await this.prisma.store.count({ where: { userId: link.userId } });
+    if (storeCount === 0) {
+      await this.prisma.store.create({
+        data: { userId: link.userId, name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' },
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'USER_LOGGED_IN',
+        userId: link.userId,
+        entity: 'User',
+        entityId: link.userId,
+        metadata: { via: 'telegram', telegramId: String(tgUser.id) },
+      },
+    });
+
+    return this.finalizeLogin(link.userId, {
+      device: dto.device ?? { type: 'telegram' },
+      ipAddress: dto.ipAddress,
+      userAgent: dto.userAgent,
+    });
+  }
+
+  /** initData HMAC tekshiruvi (Telegram WebApp). To'g'ri bo'lsa user obyektini
+   *  qaytaradi, aks holda null. */
+  private validateTelegramInitData(initData: string): any | null {
+    const botToken = this.config.get<string>('TELEGRAM_BOT_TOKEN') || process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken || !initData) return null;
+    try {
+      const params = new URLSearchParams(initData);
+      const hash = params.get('hash');
+      if (!hash) return null;
+      params.delete('hash');
+      const dataCheckString = [...params.entries()]
+        .map(([k, v]) => `${k}=${v}`)
+        .sort()
+        .join('\n');
+      const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+      const computed = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+      if (computed !== hash) return null;
+      // 24 soatdan eski initData'ni rad etamiz (replay himoyasi)
+      const authDate = Number(params.get('auth_date') || 0);
+      if (authDate && Date.now() / 1000 - authDate > 86_400) return null;
+      const userJson = params.get('user');
+      return userJson ? JSON.parse(userJson) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Token + sessiya + refresh-token yaratib, to'liq login javobini qaytaradi
+   *  (verifyOtp va loginWithTelegram uchun umumiy). */
+  private async finalizeLogin(
+    userId: string,
+    meta: { device?: any; ipAddress?: string; userAgent?: string },
+  ): Promise<{ user: any; accessToken: string; refreshToken: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { stores: true },
+    });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const { accessToken, refreshToken } = await this.generateTokens(user);
+
+    await this.sessionService.createSession({
+      userId: user.id,
+      token: refreshToken,
+      device: meta.device,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+    });
+
+    await this.prisma.refreshToken.create({
+      data: {
+        token: refreshToken,
+        userId: user.id,
+        expiresAt: new Date(
+          Date.now() +
+            this.parseDuration(this.config.get<string>('jwt.refreshTokenExpiresIn') ?? '7d'),
+        ),
+      },
+    });
+
+    return {
+      user: {
+        id: user.id,
+        phone: user.phone,
+        email: user.email,
+        name: user.name,
+        avatar: user.avatar,
+        stores: user.stores,
       },
       accessToken,
       refreshToken,

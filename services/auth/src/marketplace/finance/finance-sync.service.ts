@@ -245,6 +245,8 @@ export class FinanceSyncService {
     type Item = { id: string; amount: number; source: string; description: string; date: number | null; status: string };
     const logistics: Item[] = [];
     const fines: Item[] = [];
+    const marketing: Item[] = []; // pulli targ'ibot / reklama (source "Marketing")
+    const other: Item[] = [];     // kategoriyaga tushmagan boshqa OUTCOME xarajatlar
     const refunds: Item[] = []; // type === "INCOME" — money returned to seller
 
     for (const e of payments) {
@@ -271,16 +273,30 @@ export class FinanceSyncService {
       }
 
       const src = source.toLowerCase();
+      const blob = `${src} ${description.toLowerCase()}`;
+      // Marketing/reklama: source "Marketing" yoki tavsifda targ'ibot/reklama
+      const isMarketing =
+        src.includes('marketing') ||
+        blob.includes("targ'ib") || blob.includes('targ‘ib') || blob.includes('targib') ||
+        blob.includes('reklam') || blob.includes('реклам') ||
+        blob.includes('продвиж') || blob.includes('promotion') || blob.includes('advertis');
       if (src.includes('logistik')) {
         logistics.push(item);
       } else if (src.includes('uzum market') || src.includes('ombor')) {
         // "Uzum Market" = platform fines; "Uzum ombori" = warehouse fines
         fines.push(item);
+      } else if (isMarketing) {
+        marketing.push(item);
+      } else {
+        // Qolgan barcha OUTCOME xarajatlar — jami "yechilgan" to'g'ri bo'lishi uchun
+        other.push(item);
       }
     }
 
     const logisticsTotal = logistics.reduce((s, x) => s + x.amount, 0);
     const finesTotal = fines.reduce((s, x) => s + x.amount, 0);
+    const marketingTotal = marketing.reduce((s, x) => s + x.amount, 0);
+    const otherTotal = other.reduce((s, x) => s + x.amount, 0);
     const refundsTotal = refunds.reduce((s, x) => s + x.amount, 0);
 
     const payload = {
@@ -288,8 +304,17 @@ export class FinanceSyncService {
       logisticsCount: logistics.length,
       finesTotal,
       finesCount: fines.length,
-      // "Jami yechilgan" = Logistika + Jarimalar ONLY — refunds intentionally excluded
-      combined: logisticsTotal + finesTotal,
+      // Marketing (pulli targ'ibot / reklama) — alohida kategoriya
+      marketingTotal,
+      marketingCount: marketing.length,
+      marketing,
+      // Boshqa kategoriyaga tushmagan OUTCOME xarajatlar
+      otherTotal,
+      otherCount: other.length,
+      other,
+      // "Jami yechilgan" = BARCHA OUTCOME (Logistika + Jarimalar + Marketing + Boshqa).
+      // Refundlar (INCOME) bu yerga kirmaydi.
+      combined: logisticsTotal + finesTotal + marketingTotal + otherTotal,
       // INCOME bucket — Uzum returned money to seller (refunds, compensations)
       refundsTotal,
       refundsCount: refunds.length,

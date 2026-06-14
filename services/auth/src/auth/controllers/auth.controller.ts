@@ -1,6 +1,6 @@
 import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { AuthService } from '../services/auth.service';
-import { SendOtpDto, VerifyOtpDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
+import { SendOtpDto, VerifyOtpDto, TelegramLoginDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -24,6 +24,16 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async verifyOtp(@Body() dto: VerifyOtpDto) {
     return this.authService.verifyOtp(dto);
+  }
+
+  /**
+   * POST /auth/telegram
+   * Login via Telegram WebApp initData (no OTP) — auto-detects the linked phone
+   */
+  @Post('telegram')
+  @HttpCode(HttpStatus.OK)
+  async telegram(@Body() dto: TelegramLoginDto) {
+    return this.authService.loginWithTelegram(dto);
   }
 
   /**

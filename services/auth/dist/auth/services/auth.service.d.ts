@@ -4,7 +4,7 @@ import { PrismaService } from '../../common/database/prisma.service';
 import { OtpService } from '../../otp/otp.service';
 import { SessionService } from '../../sessions/sessions.service';
 import { SmsService } from '../../sms/sms.service';
-import { SendOtpDto, VerifyOtpDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
+import { SendOtpDto, VerifyOtpDto, TelegramLoginDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
 export declare class AuthService {
     private prisma;
     private jwtService;
@@ -22,6 +22,13 @@ export declare class AuthService {
         accessToken: string;
         refreshToken: string;
     }>;
+    loginWithTelegram(dto: TelegramLoginDto): Promise<{
+        user: any;
+        accessToken: string;
+        refreshToken: string;
+    }>;
+    private validateTelegramInitData;
+    private finalizeLogin;
     refreshToken(dto: RefreshTokenDto): Promise<{
         accessToken: string;
         refreshToken: string;

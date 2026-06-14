@@ -26,6 +26,9 @@ let AuthController = class AuthController {
     async verifyOtp(dto) {
         return this.authService.verifyOtp(dto);
     }
+    async telegram(dto) {
+        return this.authService.loginWithTelegram(dto);
+    }
     async refresh(dto) {
         return this.authService.refreshToken(dto);
     }
@@ -56,6 +59,14 @@ __decorate([
     __metadata("design:paramtypes", [auth_dto_1.VerifyOtpDto]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "verifyOtp", null);
+__decorate([
+    (0, common_1.Post)('telegram'),
+    (0, common_1.HttpCode)(common_1.HttpStatus.OK),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [auth_dto_1.TelegramLoginDto]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "telegram", null);
 __decorate([
     (0, common_1.Post)('refresh'),
     (0, common_1.HttpCode)(common_1.HttpStatus.OK),

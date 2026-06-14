@@ -28,6 +28,21 @@ export class VerifyOtpDto {
   userAgent?: string;
 }
 
+export class TelegramLoginDto {
+  @IsNotEmpty()
+  @IsString()
+  initData: string;
+
+  device?: {
+    type?: string;
+    os?: string;
+    browser?: string;
+  };
+
+  ipAddress?: string;
+  userAgent?: string;
+}
+
 export class RefreshTokenDto {
   @IsNotEmpty()
   @IsString()

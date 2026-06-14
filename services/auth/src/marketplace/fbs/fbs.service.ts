@@ -210,8 +210,135 @@ export class FbsService {
     const result = await this.uzumClient.confirmFbsOrder(storeId, apiKey, orderId);
     // Keshni o'chirmaymiz — muddati o'tgan deb belgilaymiz. Keyingi so'rov eski
     // qiymatni darhol oladi (SWR), yangilash fonda ketadi; badge qotib qolmaydi.
-    for (const entry of this.countsCache.values()) entry.expiresAt = 0;
+    this.expireCounts();
     return result;
+  }
+
+  /** Counts keshini "eskirgan" deb belgilaydi (o'chirmaydi) — SWR uchun. */
+  private expireCounts() {
+    for (const entry of this.countsCache.values()) entry.expiresAt = 0;
+  }
+
+  /** Buyurtmani bekor qilish. reason — Uzum bekor qilish sabablaridan biri. */
+  async cancelOrder(userId: string, storeId: string, orderId: number | string, reason: string, comment?: string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const result = await this.uzumClient.cancelFbsOrder(storeId, apiKey, orderId, reason, comment);
+    this.expireCounts();
+    return result;
+  }
+
+  /** Buyurtma pozitsiyalariga identifikator (IMEI / ASL belgisi) biriktirish. */
+  async setOrderIdentifiers(
+    userId: string,
+    storeId: string,
+    orderId: number | string,
+    items: Array<{ orderItemId: number; values: string[] }>,
+  ) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    return this.uzumClient.setFbsOrderIdentifiers(storeId, apiKey, orderId, items);
+  }
+
+  /** Bekor qilish / qaytarish sabablari ro'yxati (60 daqiqa keshlanadi). */
+  private returnReasonsCache = new Map<string, { fetchedAt: number; data: any[] }>();
+  async getReturnReasons(userId: string, storeId: string) {
+    const cached = this.returnReasonsCache.get(storeId);
+    if (cached && Date.now() - cached.fetchedAt < 60 * 60 * 1000) return cached.data;
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const data = await this.uzumClient.getFbsReturnReasons(storeId, apiKey);
+    this.returnReasonsCache.set(storeId, { fetchedAt: Date.now(), data });
+    return data;
+  }
+
+  // ─── DBS amallari ────────────────────────────────────────────────────
+  async dbsDelivering(userId: string, storeId: string, orderId: number | string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const r = await this.uzumClient.dbsOrderDelivering(storeId, apiKey, orderId);
+    this.expireCounts();
+    return r;
+  }
+  async dbsCompleted(userId: string, storeId: string, orderId: number | string, issueCode?: number) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const r = await this.uzumClient.dbsOrderCompleted(storeId, apiKey, orderId, issueCode);
+    this.expireCounts();
+    return r;
+  }
+  async dbsRefund(userId: string, storeId: string, orderId: number | string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const r = await this.uzumClient.dbsOrderRefund(storeId, apiKey, orderId);
+    this.expireCounts();
+    return r;
+  }
+
+  // ─── Narx tahrirlash ─────────────────────────────────────────────────
+  /** SKU narxlarini o'zgartirish. Keyin live-products keshini tozalaydi. */
+  async updatePrices(
+    userId: string,
+    storeId: string,
+    productId: number,
+    skuList: Array<{ skuId: number; fullPrice?: number; sellPrice?: number; skuTitle?: string }>,
+  ) {
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const result = await this.uzumClient.sendPriceData(storeId, apiKey, uzumShopId, productId, skuList);
+    if (result.ok) {
+      this.productsCache.clear();
+      this.productAnalyticsCache.delete(storeId);
+    }
+    return result;
+  }
+
+  // ─── Dalolatnoma / akt PDF ───────────────────────────────────────────
+  /** Ta'minlash akti (yuborish dalolatnomasi) PDF — Buffer yoki null. */
+  async getInvoiceActPdf(userId: string, storeId: string, invoiceId: number | string): Promise<Buffer | null> {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const base64 = await this.uzumClient.getFbsInvoiceActPdf(storeId, apiKey, invoiceId);
+    return base64 ? Buffer.from(base64, 'base64') : null;
+  }
+  /** Qabul akti (closing/priyomka) PDF — Buffer yoki null. */
+  async getInvoiceClosingPdf(userId: string, storeId: string, invoiceId: number | string): Promise<Buffer | null> {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const base64 = await this.uzumClient.getFbsInvoiceClosingDocsPdf(storeId, apiKey, invoiceId);
+    return base64 ? Buffer.from(base64, 'base64') : null;
+  }
+
+  // ─── Ta'minlash: yaratish / bekor / drop-off / time-slot ─────────────
+  async cancelInvoice(userId: string, storeId: string, invoiceId: number | string) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    return this.uzumClient.cancelFbsInvoice(storeId, apiKey, invoiceId);
+  }
+  async getInvoiceDropOffPoints(userId: string, storeId: string, orderIds: (number | string)[]) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    return this.uzumClient.getFbsInvoiceDropOffPoints(storeId, apiKey, orderIds);
+  }
+  async getInvoiceTimeSlots(userId: string, storeId: string, dopId: string, orderIds: (number | string)[]) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    return this.uzumClient.getFbsInvoiceTimeSlots(storeId, apiKey, dopId, orderIds);
+  }
+  async createInvoice(
+    userId: string,
+    storeId: string,
+    body: { orderIds: number[]; dropOffPointUuid: string; timeSlotUuid: string; sellerId: number; idempotencyKey?: string },
+  ) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const r = await this.uzumClient.createFbsInvoice(storeId, apiKey, body);
+    this.expireCounts();
+    return r;
+  }
+
+  // ─── Qaytarishlar (Returns) ──────────────────────────────────────────
+  async getReturns(userId: string, storeId: string, params: { returnId?: number | string; page?: number; size?: number } = {}) {
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const { returnId, page = 0, size = 50 } = params;
+    const returns = returnId
+      ? [await this.uzumClient.getSellerReturnById(storeId, apiKey, uzumShopId, returnId)].filter(Boolean)
+      : await this.uzumClient.getSellerReturns(storeId, apiKey, uzumShopId, { page, size });
+    return { returns };
+  }
+
+  // ─── FBO ta'minlash aktlari (SKU tarkibi bilan) ──────────────────────
+  async getSupplyInvoices(userId: string, storeId: string, page = 0, size = 50) {
+    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const invoices = await this.uzumClient.getSellerInvoices(storeId, apiKey, { page, size });
+    return { invoices };
   }
 
   // ─── FBS Invoices (Ta'minlashlar) ────────────────────────────────────

@@ -54,6 +54,82 @@ export declare class FbsService {
         order?: any;
         error?: string;
     }>;
+    private expireCounts;
+    cancelOrder(userId: string, storeId: string, orderId: number | string, reason: string, comment?: string): Promise<{
+        ok: boolean;
+        error?: string;
+        code?: string;
+    }>;
+    setOrderIdentifiers(userId: string, storeId: string, orderId: number | string, items: Array<{
+        orderItemId: number;
+        values: string[];
+    }>): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+    }>;
+    private returnReasonsCache;
+    getReturnReasons(userId: string, storeId: string): Promise<any[]>;
+    dbsDelivering(userId: string, storeId: string, orderId: number | string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    dbsCompleted(userId: string, storeId: string, orderId: number | string, issueCode?: number): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    dbsRefund(userId: string, storeId: string, orderId: number | string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    updatePrices(userId: string, storeId: string, productId: number, skuList: Array<{
+        skuId: number;
+        fullPrice?: number;
+        sellPrice?: number;
+        skuTitle?: string;
+    }>): Promise<{
+        ok: boolean;
+        error?: string;
+        code?: string;
+    }>;
+    getInvoiceActPdf(userId: string, storeId: string, invoiceId: number | string): Promise<Buffer | null>;
+    getInvoiceClosingPdf(userId: string, storeId: string, invoiceId: number | string): Promise<Buffer | null>;
+    cancelInvoice(userId: string, storeId: string, invoiceId: number | string): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    getInvoiceDropOffPoints(userId: string, storeId: string, orderIds: (number | string)[]): Promise<any[]>;
+    getInvoiceTimeSlots(userId: string, storeId: string, dopId: string, orderIds: (number | string)[]): Promise<any[]>;
+    createInvoice(userId: string, storeId: string, body: {
+        orderIds: number[];
+        dropOffPointUuid: string;
+        timeSlotUuid: string;
+        sellerId: number;
+        idempotencyKey?: string;
+    }): Promise<{
+        ok: boolean;
+        payload?: any;
+        error?: string;
+        code?: string;
+    }>;
+    getReturns(userId: string, storeId: string, params?: {
+        returnId?: number | string;
+        page?: number;
+        size?: number;
+    }): Promise<{
+        returns: any[];
+    }>;
+    getSupplyInvoices(userId: string, storeId: string, page?: number, size?: number): Promise<{
+        invoices: any[];
+    }>;
     getInvoices(userId: string, storeId: string, statuses?: string[], page?: number, size?: number): Promise<{
         invoices: any[];
     }>;
