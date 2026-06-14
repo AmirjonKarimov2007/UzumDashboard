@@ -115,15 +115,17 @@ export class OtpService {
   }
 
   /**
-   * Generate random code
+   * Generate random code (TEST MODE: always 555555)
    */
   private generateCode(length: number): string {
-    const chars = '0123456789';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+    return '555555'; // Test mode - fixed OTP
+    // Production code (disabled):
+    // const chars = '0123456789';
+    // let result = '';
+    // for (let i = 0; i < length; i++) {
+    //   result += chars.charAt(Math.floor(Math.random() * chars.length));
+    // }
+    // return result;
   }
 
   /**

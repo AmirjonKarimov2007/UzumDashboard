@@ -53,7 +53,7 @@ module.exports = {
       cwd: './services/auth',
       out_file: './.pm2/uzum-auth.out.log',
       error_file: './.pm2/uzum-auth.err.log',
-      env: { NODE_ENV: 'production' },
+      env: { NODE_ENV: 'production', APP_PORT: '3003' },
     },
     {
       ...baseApp,
@@ -62,7 +62,7 @@ module.exports = {
       cwd: './web',
       out_file: './.pm2/uzum-web.out.log',
       error_file: './.pm2/uzum-web.err.log',
-      env: { NODE_ENV: 'production', PORT: '3000' },
+      env: { NODE_ENV: 'production', PORT: '3002' },
     },
   ],
 };
