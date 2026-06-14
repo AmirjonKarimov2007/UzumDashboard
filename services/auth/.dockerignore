@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.gitignore
+.env*
+!.env.example
+.pm2
+.logs
+.cache
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
+test
+coverage
+.vscode
+.idea

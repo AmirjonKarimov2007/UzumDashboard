@@ -1,32 +1,29 @@
 /**
- * PM2 ecosystem config — keeps the auth backend + web frontend running permanently.
+ * PM2 ecosystem config — PRODUCTION.
  *
- * Why this exists:
- *   Running `npm run start:dev` in a terminal is fragile — when you close VS Code,
- *   the dev terminal, or restart your machine, the service dies and login breaks
- *   with "SMS yuborishda xato". PM2 daemonizes the processes so they survive
- *   terminal closes, auto-restart on crash, and (optionally) survive reboots.
+ * Runs the COMPILED artifacts (not dev servers). You must build first:
  *
- * One-time setup:
- *   npm install -g pm2     (already done)
+ *   # backend
+ *   cd services/auth && npm ci && npx prisma generate && npx prisma migrate deploy && npm run build
+ *   # frontend
+ *   cd web && npm ci && npm run build
  *
- * Daily usage (just one command):
- *   pm2 start ecosystem.config.js     # or double-click start.bat
- *   pm2 list                          # see what's running
- *   pm2 logs                          # tail all logs
- *   pm2 logs uzum-auth                # tail just backend
- *   pm2 restart all                   # force restart everything
- *   pm2 stop all                      # stop everything
+ * Then from the repo root:
+ *   pm2 start ecosystem.config.js
+ *   pm2 save                 # persist the process list
+ *   pm2 logs                 # tail all logs
+ *   pm2 restart all          # after deploying a new build
  *
- * Survive reboot (optional, requires admin once):
- *   pm2 save
- *   npm install -g pm2-windows-startup
- *   pm2-startup install
+ * Survive reboot (once, as admin):
+ *   pm2 startup    # follow the printed instructions, then: pm2 save
+ *
+ * NOTE: the backend reads services/auth/.env — it must hold PRODUCTION values
+ * (NODE_ENV=production, strong rotated secrets, SMS_PROVIDER=eskiz, real CORS_ORIGINS).
  */
 
-// Windows quirk: Node.js v17+ refuses to spawn .cmd / .bat files directly without
-// `shell: true` (EINVAL). PM2 doesn't pass that flag, so we go through cmd.exe.
-// On Linux/macOS we use `sh -c` for symmetry.
+// Windows quirk: Node v17+ won't spawn .cmd/.bat directly without shell:true
+// (EINVAL). PM2 doesn't pass that flag, so we go through cmd.exe on Windows and
+// sh -c elsewhere.
 const isWin = process.platform === 'win32';
 
 function runShell(cmd) {
@@ -51,21 +48,21 @@ module.exports = {
   apps: [
     {
       ...baseApp,
-      ...runShell('npm run start:dev'),
+      ...runShell('npm run start:prod'), // node dist/main
       name: 'uzum-auth',
       cwd: './services/auth',
       out_file: './.pm2/uzum-auth.out.log',
       error_file: './.pm2/uzum-auth.err.log',
-      env: { NODE_ENV: 'development' },
+      env: { NODE_ENV: 'production' },
     },
     {
       ...baseApp,
-      ...runShell('npm run dev'),
+      ...runShell('npm run start'), // next start (serves the production build)
       name: 'uzum-web',
       cwd: './web',
       out_file: './.pm2/uzum-web.out.log',
       error_file: './.pm2/uzum-web.err.log',
-      env: { NODE_ENV: 'development' },
+      env: { NODE_ENV: 'production', PORT: '3000' },
     },
   ],
 };

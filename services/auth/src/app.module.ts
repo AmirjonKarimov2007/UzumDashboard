@@ -20,6 +20,7 @@ import { FbsModule } from './marketplace/fbs/fbs.module';
 import { ReturnsModule } from './marketplace/returns/returns.module';
 import { TelegramModule } from './marketplace/telegram/telegram.module';
 import { SyncModule } from './sync/sync.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { SyncModule } from './sync/sync.module';
     ReturnsModule,
     TelegramModule,
     SyncModule,
+    HealthModule,
   ],
 })
 export class AppModule {}
