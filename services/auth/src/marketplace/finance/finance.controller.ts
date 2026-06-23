@@ -59,6 +59,25 @@ export class FinanceController {
     });
   }
 
+  @Get('sold-products')
+  getSoldProductsSummary(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('timeRange') timeRange?: string,
+    @Query('force') force?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.financeSyncService.getSoldProductsSummary(userId, storeId, {
+      timeRange: timeRange || 'today',
+      force: force === '1' || force === 'true',
+      dateFrom: dateFrom ? Number(dateFrom) : undefined,
+      dateTo: dateTo ? Number(dateTo) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
   @Get('logistics-fines')
   getLogisticsAndFines(
     @CurrentUser('id') userId: string,

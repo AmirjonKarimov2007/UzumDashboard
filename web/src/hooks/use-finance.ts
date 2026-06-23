@@ -134,6 +134,33 @@ export interface DashboardDateRange {
   dateTo: number;
 }
 
+export interface SoldProductsSummaryResponse {
+  timeRange: string;
+  dateFrom: number;
+  dateTo: number;
+  totals: {
+    products: number;
+    shown: number;
+    orders: number;
+    unitsSold: number;
+    returnedUnits: number;
+    revenue: number;
+  };
+  products: {
+    id: string;
+    productId: string;
+    skuTitle: string;
+    name: string;
+    category: string;
+    image?: string;
+    soldCount: number;
+    returnedCount: number;
+    revenue: number;
+    ordersCount: number;
+    lastSoldAt: number;
+  }[];
+}
+
 export function useDashboardSummary(timeRange = 'today', custom?: DashboardDateRange | null) {
   const storeId = useActiveStoreId();
   const forceRef = useRef(false);
@@ -153,6 +180,49 @@ export function useDashboardSummary(timeRange = 'today', custom?: DashboardDateR
           timeout: 90_000,
           params: {
             timeRange,
+            ...(hasCustom ? { dateFrom: custom!.dateFrom, dateTo: custom!.dateTo } : {}),
+            ...(force ? { force: 1 } : {}),
+          },
+        },
+      );
+      return data;
+    },
+    enabled: !!storeId,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    retry: 0,
+  });
+
+  const refresh = () => {
+    forceRef.current = true;
+    return query.refetch();
+  };
+
+  return { ...query, refresh };
+}
+
+export function useSoldProductsSummary(timeRange = 'today', custom?: DashboardDateRange | null, limit = 200) {
+  const storeId = useActiveStoreId();
+  const forceRef = useRef(false);
+  const hasCustom = !!custom && custom.dateFrom > 0 && custom.dateTo > 0;
+
+  const query = useQuery({
+    queryKey: hasCustom
+      ? ['finance', 'sold-products', storeId, 'custom', custom!.dateFrom, custom!.dateTo, limit]
+      : ['finance', 'sold-products', storeId, timeRange, limit],
+    queryFn: async () => {
+      const { apiClient } = await import('@/lib/api/client');
+      const force = forceRef.current;
+      forceRef.current = false;
+      const { data } = await apiClient.get<SoldProductsSummaryResponse>(
+        `/marketplace/stores/${storeId}/finance/sold-products`,
+        {
+          timeout: 90_000,
+          params: {
+            timeRange,
+            limit,
             ...(hasCustom ? { dateFrom: custom!.dateFrom, dateTo: custom!.dateTo } : {}),
             ...(force ? { force: 1 } : {}),
           },

@@ -451,6 +451,30 @@ export class FinanceSyncService {
     });
   }
 
+  async getSoldProductsSummary(
+    userId: string,
+    storeId: string,
+    opts: { force?: boolean; timeRange?: string; dateFrom?: number; dateTo?: number; limit?: number } = {},
+  ) {
+    const timeRange = opts.timeRange || 'today';
+    const hasCustom = opts.dateFrom != null && opts.dateTo != null;
+    const bucket = (ms?: number) => (ms != null ? Math.floor(ms / (60 * 60 * 1000)) : 'x');
+    const limit = Math.max(1, Math.min(Number(opts.limit || 200), 500));
+    const key = hasCustom
+      ? `sold-products:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}:${limit}`
+      : `sold-products:${storeId}:${timeRange}:${limit}`;
+    return this.swr({
+      key,
+      ttlMs: this.RECON_CACHE_TTL_MS,
+      force: opts.force,
+      producer: () => this.computeSoldProductsSummary(userId, storeId, timeRange, {
+        dateFrom: opts.dateFrom,
+        dateTo: opts.dateTo,
+        limit,
+      }),
+    });
+  }
+
   // ── Tan narx resolution (mahsulot ro'yxati + ProductMeta) ──
   // Mahsulot ro'yxati BARCHA davrlar uchun bir xil, shuning uchun uni alohida
   // SWR kalitida keshlaymiz — "Bugun"→"Hafta"→"Oy" o'tishlarida qayta yuklanmaydi.
@@ -745,6 +769,145 @@ export class FinanceSyncService {
     };
 
     return payload;
+  }
+
+  private async computeSoldProductsSummary(
+    userId: string,
+    storeId: string,
+    timeRange: string,
+    opts: { dateFrom?: number; dateTo?: number; limit: number },
+  ) {
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    let fromMs: number;
+    let toMs: number;
+    if (opts.dateFrom != null && opts.dateTo != null) {
+      fromMs = Math.min(opts.dateFrom, opts.dateTo);
+      toMs = Math.max(opts.dateFrom, opts.dateTo);
+    } else {
+      const { from, to } = this.resolveRange(timeRange);
+      fromMs = from.getTime();
+      toMs = to.getTime();
+    }
+
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 40;
+    const fetchAll = async (): Promise<any[]> => {
+      const out: any[] = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const resp = await this.uzumClient.getFinanceOrders(storeId, apiKey, [uzumShopId], {
+          page,
+          size: PAGE_SIZE,
+          group: false,
+          dateFrom: fromMs,
+          dateTo: toMs,
+        });
+        out.push(...resp.orderItems);
+        if (resp.orderItems.length < PAGE_SIZE || out.length >= resp.total) break;
+      }
+      return out;
+    };
+
+    const [items, cost] = await Promise.all([
+      fetchAll().catch((err: any) => {
+        this.logger.warn(`SoldProducts: finance orders fetch failed: ${err?.message}`);
+        return [] as any[];
+      }),
+      this.getCostResolution(userId, storeId, false),
+    ]);
+
+    const products = new Map<string, {
+      id: string;
+      productId: string;
+      skuTitle: string;
+      name: string;
+      category: string;
+      image: string;
+      soldCount: number;
+      returnedCount: number;
+      revenue: number;
+      orders: Set<string | number>;
+      lastSoldAt: number;
+    }>();
+    const orderIds = new Set<string | number>();
+    let unitsSold = 0;
+    let revenue = 0;
+    let returnedUnits = 0;
+
+    for (const it of items) {
+      const status = String(it.status || '').toUpperCase();
+      if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED') continue;
+
+      const soldQty = Math.max(0, Number(it.amount || 0) - Number(it.amountReturns || 0));
+      const returnedQty = Math.max(0, Number(it.amountReturns || 0));
+      if (soldQty <= 0 && returnedQty <= 0) continue;
+
+      const pid = it.productId != null ? String(it.productId) : '';
+      const skuTitle = String(it.skuTitle || '');
+      const name = (pid && cost.titleByProductId[pid]) || it.productTitle || skuTitle || 'Mahsulot';
+      const key = pid || skuTitle || name;
+      const dateMs = Number(it.date || it.dateIssued || toMs);
+      const row = products.get(key) || {
+        id: key,
+        productId: pid,
+        skuTitle,
+        name,
+        category: (pid && cost.categoryByProductId[pid]) || 'Boshqa',
+        image: (pid && cost.imageByProductId[pid]) || it.productImage?.photo?.['240']?.high || '',
+        soldCount: 0,
+        returnedCount: 0,
+        revenue: 0,
+        orders: new Set<string | number>(),
+        lastSoldAt: 0,
+      };
+
+      const profit = Number(it.sellerProfit || 0);
+      row.soldCount += soldQty;
+      row.returnedCount += returnedQty;
+      row.revenue += profit;
+      row.lastSoldAt = Math.max(row.lastSoldAt, dateMs);
+      if (it.orderId != null) {
+        row.orders.add(it.orderId);
+        orderIds.add(it.orderId);
+      }
+      products.set(key, row);
+
+      unitsSold += soldQty;
+      returnedUnits += returnedQty;
+      revenue += profit;
+    }
+
+    const rows = [...products.values()]
+      .filter((p) => p.soldCount > 0 || p.returnedCount > 0 || p.revenue > 0)
+      .sort((a, b) => b.soldCount - a.soldCount || b.revenue - a.revenue)
+      .slice(0, opts.limit)
+      .map((p) => ({
+        id: p.id,
+        productId: p.productId,
+        skuTitle: p.skuTitle,
+        name: p.name,
+        category: p.category,
+        image: p.image,
+        soldCount: p.soldCount,
+        returnedCount: p.returnedCount,
+        revenue: Math.round(p.revenue),
+        ordersCount: p.orders.size,
+        lastSoldAt: p.lastSoldAt,
+      }));
+
+    return {
+      timeRange,
+      dateFrom: fromMs,
+      dateTo: toMs,
+      totals: {
+        products: products.size,
+        shown: rows.length,
+        orders: orderIds.size,
+        unitsSold,
+        returnedUnits,
+        revenue: Math.round(revenue),
+      },
+      products: rows,
+    };
   }
 
   /**

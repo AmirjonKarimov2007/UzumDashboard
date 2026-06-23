@@ -13,7 +13,7 @@ import { SalesBarChart } from "@/components/charts/bar-chart";
 import { DonutChart, DonutLegend } from "@/components/charts/donut-chart";
 import { PageHeader } from "@/components/shared/page-header";
 import { cn } from "@/lib/utils";
-import { useDashboardSummary } from "@/hooks/use-finance";
+import { useDashboardSummary, useSoldProductsSummary } from "@/hooks/use-finance";
 import { useProductAnalytics, type ProductAnalyticsRow } from "@/hooks/use-products";
 import { useSyncStatus } from "@/hooks/use-sync";
 import { useDashboardStore } from "@/stores/dashboard-store";
@@ -76,7 +76,8 @@ export default function AnalyticsPage() {
 
   // Mahsulotlar analitikasi (umumiy, davrdan mustaqil)
   const pa = useProductAnalytics();
-  const refreshAll = () => { refresh(); pa.refresh(); };
+  const soldProducts = useSoldProductsSummary(timeRange, custom, 200);
+  const refreshAll = () => { refresh(); soldProducts.refresh(); pa.refresh(); };
 
   // ── Real ko'rsatkichlar (davr bo'yicha) ──────────────────────────────
   const revenue = summary?.revenue ?? 0;
@@ -349,6 +350,15 @@ export default function AnalyticsPage() {
             </motion.div>
           </div>
 
+          <SoldProductsPeriodSection
+            data={soldProducts.data}
+            isLoading={soldProducts.isLoading || soldProducts.isFetching}
+            isError={soldProducts.isError}
+            onRefresh={() => soldProducts.refresh()}
+            periodHint={periodHint}
+            fmtMoney={fmtMoney}
+          />
+
           {/* Top mahsulotlar */}
           <motion.div
             initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
@@ -406,6 +416,178 @@ export default function AnalyticsPage() {
 // ════════════════════════════════════════════════════════════════════════════
 //  Mahsulotlar bo'yicha to'liq analitika (umumiy ko'rsatkichlar, davrdan mustaqil)
 // ════════════════════════════════════════════════════════════════════════════
+
+type SoldProductsData = NonNullable<ReturnType<typeof useSoldProductsSummary>["data"]>;
+type SoldProductSort = "sold" | "revenue" | "orders" | "returned";
+
+function SoldProductsPeriodSection({
+  data,
+  isLoading,
+  isError,
+  onRefresh,
+  periodHint,
+  fmtMoney,
+}: {
+  data?: SoldProductsData;
+  isLoading: boolean;
+  isError: boolean;
+  onRefresh: () => void;
+  periodHint: string;
+  fmtMoney: (n: number) => string;
+}) {
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SoldProductSort>("sold");
+  const fmtNum2 = (n: number) => new Intl.NumberFormat("uz-UZ").format(Math.round(n || 0));
+
+  const rows = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const list = (data?.products ?? []).filter((product) => {
+      if (!query) return true;
+      return product.name.toLowerCase().includes(query)
+        || product.category.toLowerCase().includes(query)
+        || product.skuTitle.toLowerCase().includes(query)
+        || String(product.productId).includes(query);
+    });
+    const value = (product: SoldProductsData["products"][number]) => {
+      if (sort === "revenue") return product.revenue;
+      if (sort === "orders") return product.ordersCount;
+      if (sort === "returned") return product.returnedCount;
+      return product.soldCount;
+    };
+    return [...list].sort((a, b) => value(b) - value(a));
+  }, [data, search, sort]);
+
+  const sortOptions: { id: SoldProductSort; label: string }[] = [
+    { id: "sold", label: "Sotilgan dona" },
+    { id: "revenue", label: "Daromad" },
+    { id: "orders", label: "Buyurtma soni" },
+    { id: "returned", label: "Qaytgan dona" },
+  ];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.38 }}
+      className="rounded-2xl bg-[#0f0f16] border border-[#1c1c24] overflow-hidden"
+    >
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 px-5 py-4 border-b border-[#18181b]">
+        <div>
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <ShoppingCart className="w-4 h-4 text-[#10b981]" />
+            Davr bo'yicha sotilgan mahsulotlar
+          </h2>
+          <p className="text-xs text-[#52525b] mt-0.5">{periodHint} — mahsulot kesimida nechta sotilgani</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#52525b]" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Mahsulot qidirish..."
+              className="h-9 w-52 pl-8 pr-3 rounded-xl bg-[#18181b] border border-[#27272a] text-xs text-white placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6]"
+            />
+          </div>
+          <div className="relative">
+            <ArrowDownUp className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#52525b] pointer-events-none" />
+            <select
+              value={sort}
+              onChange={(event) => setSort(event.target.value as SoldProductSort)}
+              className="h-9 pl-8 pr-7 rounded-xl bg-[#18181b] border border-[#27272a] text-xs text-white focus:outline-none focus:border-[#8b5cf6] appearance-none cursor-pointer"
+            >
+              {sortOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </div>
+          <button
+            onClick={onRefresh}
+            disabled={isLoading}
+            className="inline-flex items-center gap-1.5 h-9 px-3 rounded-xl bg-[#18181b] border border-[#27272a] text-xs text-[#a1a1aa] hover:text-white hover:border-[#8b5cf6]/60 disabled:opacity-50"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", isLoading && "animate-spin")} />
+            Yangilash
+          </button>
+        </div>
+      </div>
+
+      {data && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-5 border-b border-[#18181b]">
+          {[
+            { label: "Sotilgan", value: `${fmtNum2(data.totals.unitsSold)} dona`, sub: `${fmtNum2(data.totals.products)} mahsulot`, icon: ShoppingCart, color: "#10b981" },
+            { label: "Buyurtmalar", value: fmtNum2(data.totals.orders), sub: "noyob orderlar", icon: Package, color: "#3b82f6" },
+            { label: "Daromad", value: fmtMoney(data.totals.revenue), sub: "seller profit", icon: DollarSign, color: "#8b5cf6" },
+            { label: "Qaytgan", value: `${fmtNum2(data.totals.returnedUnits)} dona`, sub: "davr ichida", icon: Undo2, color: "#ef4444" },
+          ].map((card) => (
+            <div key={card.label} className="rounded-xl bg-[#18181b]/60 border border-[#27272a] p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${card.color}18` }}>
+                  <card.icon className="w-4 h-4" style={{ color: card.color }} />
+                </span>
+                <span className="text-xs text-[#71717a]">{card.label}</span>
+              </div>
+              <p className="text-base font-bold text-white truncate">{card.value}</p>
+              <p className="text-[11px] text-[#52525b] mt-0.5">{card.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isLoading && !data ? (
+        <div className="py-16 flex items-center justify-center">
+          <Loader2 className="w-6 h-6 text-[#8b5cf6] animate-spin" />
+        </div>
+      ) : isError ? (
+        <div className="py-12 text-center">
+          <AlertCircle className="w-7 h-7 text-[#ef4444] mx-auto mb-2" />
+          <p className="text-sm font-semibold text-white">Davrli mahsulot sotuvlari yuklanmadi</p>
+          <button onClick={onRefresh} className="mt-3 px-4 py-2 rounded-lg bg-[#8b5cf6] text-white text-xs font-medium">Qayta urinish</button>
+        </div>
+      ) : rows.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead>
+              <tr className="text-[11px] font-semibold text-[#52525b] uppercase tracking-wider border-b border-[#18181b]">
+                <th className="text-left px-5 py-2.5 font-semibold">Mahsulot</th>
+                <th className="text-right px-3 py-2.5 font-semibold">Sotilgan</th>
+                <th className="text-right px-3 py-2.5 font-semibold">Buyurtma</th>
+                <th className="text-right px-3 py-2.5 font-semibold">Qaytgan</th>
+                <th className="text-right px-5 py-2.5 font-semibold">Daromad</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#18181b]">
+              {rows.map((product) => (
+                <tr key={product.id} className="hover:bg-[#18181b]/40 transition-colors">
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-lg bg-[#18181b] overflow-hidden flex items-center justify-center ring-1 ring-[#27272a] flex-shrink-0">
+                        {product.image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={product.image} alt={product.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : <Package className="w-4 h-4 text-[#3f3f46]" />}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-white truncate max-w-[340px]" title={product.name}>{product.name || "Nomsiz"}</p>
+                        <p className="text-[10px] text-[#52525b] truncate max-w-[340px]">{product.category || product.skuTitle || "Kategoriya yo'q"}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-right tabular-nums font-semibold text-white">{fmtNum2(product.soldCount)}</td>
+                  <td className="px-3 py-3 text-right tabular-nums text-[#a1a1aa]">{fmtNum2(product.ordersCount)}</td>
+                  <td className="px-3 py-3 text-right tabular-nums">
+                    <span className={cn(product.returnedCount > 0 ? "text-[#ef4444]" : "text-[#52525b]")}>{fmtNum2(product.returnedCount)}</span>
+                  </td>
+                  <td className="px-5 py-3 text-right tabular-nums font-semibold text-white">{fmtMoney(product.revenue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="py-12 text-center text-xs text-[#52525b]">Bu davrda sotilgan mahsulot topilmadi</div>
+      )}
+    </motion.div>
+  );
+}
 
 type ProdSort = "turnover" | "sold" | "viewers" | "rating" | "returns" | "stock" | "conversion";
 
