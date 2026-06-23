@@ -255,6 +255,47 @@ function getTimeSlotUuid(slot: any): string {
   return String(slot?.uuid ?? slot?.id ?? slot?.timeSlotUuid ?? "");
 }
 
+function startOfLocalDay(value: Date): number {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+}
+
+function addLocalDays(value: Date, days: number): Date {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function getOrderDeadline(order: any): number | null {
+  const value = order?.deliveryDate ?? order?.deliveryDateTime ?? order?.shipmentDate ?? order?.shipmentDateTime;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function isOrderDueOn(order: any, dayOffset: number): boolean {
+  const deadline = getOrderDeadline(order);
+  if (!deadline) return false;
+  const target = startOfLocalDay(addLocalDays(new Date(), dayOffset));
+  return startOfLocalDay(new Date(deadline)) === target;
+}
+
+function shortDateLabel(ms?: number | null): string {
+  if (!ms) return "Sana yo'q";
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return "Sana yo'q";
+  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`;
+}
+
+function shortTimeRange(fromMs?: number | null, toMs?: number | null): string {
+  if (!fromMs) return "Vaqt yo'q";
+  const f = new Date(fromMs);
+  if (isNaN(f.getTime())) return "Vaqt yo'q";
+  const from = `${pad2(f.getHours())}:${pad2(f.getMinutes())}`;
+  if (!toMs) return from;
+  const t = new Date(toMs);
+  if (isNaN(t.getTime())) return from;
+  return `${from} - ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+}
+
 function CopyableId({ value, label }: { value: string | number; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -817,6 +858,8 @@ function CreateInvoiceModal({
   const orderIds = useMemo(() => orders.map((o) => o.id).filter(Boolean), [orders]);
   const [dropOffUuid, setDropOffUuid] = useState("");
   const [timeSlotUuid, setTimeSlotUuid] = useState("");
+  const [pointSearch, setPointSearch] = useState("");
+  const [onlyCompatible, setOnlyCompatible] = useState(true);
   const dropOffQuery = useFbsInvoiceDropOffPoints(orderIds, open);
   const timeSlotQuery = useFbsInvoiceTimeSlots(dropOffUuid || null, orderIds, open);
   const createInvoice = useCreateFbsInvoice();
@@ -840,12 +883,32 @@ function CreateInvoiceModal({
     if (!timeSlotUuid && first) setTimeSlotUuid(getTimeSlotUuid(first));
   }, [timeSlotQuery.data, timeSlotUuid]);
 
+  const dropOffPoints = useMemo(() => {
+    const query = pointSearch.trim().toLowerCase();
+    return (dropOffQuery.data || []).filter((point) => {
+      if (onlyCompatible && point?.isSuitable === false) return false;
+      if (!query) return true;
+      return getDropOffLabel(point).toLowerCase().includes(query);
+    });
+  }, [dropOffQuery.data, onlyCompatible, pointSearch]);
+  const selectedPoint = dropOffPoints.find((point) => getDropOffUuid(point) === dropOffUuid)
+    || (dropOffQuery.data || []).find((point) => getDropOffUuid(point) === dropOffUuid);
+  const groupedSlots = useMemo(() => {
+    const map = new Map<string, any[]>();
+    for (const slot of timeSlotQuery.data || []) {
+      const key = shortDateLabel(slot?.timeFrom);
+      map.set(key, [...(map.get(key) || []), slot]);
+    }
+    return Array.from(map.entries());
+  }, [timeSlotQuery.data]);
+
   if (!open) return null;
 
   const totalQty = orders.reduce(
     (sum, order) => sum + (order.orderItems || []).reduce((n: number, item: any) => n + (Number(item.amount) || 1), 0),
     0,
   );
+  const totalValue = orders.reduce((sum, order) => sum + (Number(order.price) || 0), 0);
   const canCreate = orderIds.length > 0 && dropOffUuid && timeSlotUuid && !createInvoice.isPending;
 
   const submit = () => {
@@ -873,85 +936,165 @@ function CreateInvoiceModal({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 24, opacity: 0 }}
           onClick={(e) => e.stopPropagation()}
-          className="w-full sm:max-w-2xl max-h-[92dvh] overflow-y-auto scrollbar-thin rounded-t-2xl sm:rounded-2xl bg-[#0a0a0f] border border-[#1c1c24] shadow-2xl"
+          className="w-full sm:max-w-5xl max-h-[92dvh] overflow-hidden rounded-t-2xl sm:rounded-2xl bg-[#f8fafc] text-[#111827] border border-[#e5e7eb] shadow-2xl"
         >
-          <div className="sticky top-0 z-10 bg-[#0a0a0f] border-b border-[#1c1c24] p-4 flex items-center justify-between gap-3">
+          <div className="bg-white border-b border-[#e5e7eb] p-4 sm:p-5 flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-white">Ta'minlash yaratish</p>
-              <p className="text-xs text-[#71717a] mt-0.5">{orderIds.length} buyurtma · {totalQty} dona mahsulot</p>
+              <p className="text-base font-semibold text-[#111827]">Yangi ta'minlash</p>
+              <p className="text-xs text-[#71717a] mt-0.5">{orderIds.length} buyurtma · {totalQty} dona mahsulot · {formatCurrency(totalValue)}</p>
             </div>
-            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-[#18181b] hover:bg-[#27272a] flex items-center justify-center">
-              <X className="w-4 h-4 text-[#a1a1aa]" />
+            <button onClick={onClose} className="w-9 h-9 rounded-full bg-[#f3f4f6] hover:bg-[#e5e7eb] flex items-center justify-center">
+              <X className="w-4 h-4 text-[#4b5563]" />
             </button>
           </div>
 
-          <div className="p-4 space-y-4">
-            <div className="rounded-xl bg-[#0f0f16] border border-[#1c1c24] p-3">
-              <p className="text-[11px] uppercase tracking-wider text-[#71717a] font-semibold mb-2">Tanlangan buyurtmalar</p>
-              <div className="flex flex-wrap gap-2">
-                {orders.map((order) => (
-                  <CopyableId key={order.id} value={order.publicId || order.id} label="Order" />
-                ))}
+          <div className="grid grid-cols-1 lg:grid-cols-[420px_1fr] min-h-[520px] max-h-[calc(92dvh-138px)]">
+            <div className="bg-white border-r border-[#e5e7eb] p-4 overflow-y-auto scrollbar-thin">
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-[#d1d5db] px-3 py-2.5 mb-3">
+                <span className="flex items-center gap-2 text-sm text-[#374151]">
+                  <span className={cn("w-10 h-6 rounded-full p-0.5 transition-colors", onlyCompatible ? "bg-[#111827]" : "bg-[#d1d5db]")}>
+                    <span className={cn("block w-5 h-5 rounded-full bg-white transition-transform", onlyCompatible && "translate-x-4")} />
+                  </span>
+                  Faqat moslarini ko'rish
+                </span>
+                <AlertCircle className="w-4 h-4 text-[#9ca3af]" />
+                <input type="checkbox" checked={onlyCompatible} onChange={(e) => setOnlyCompatible(e.target.checked)} className="sr-only" />
+              </label>
+
+              <div className="relative mb-4">
+                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9ca3af]" />
+                <input
+                  value={pointSearch}
+                  onChange={(e) => setPointSearch(e.target.value)}
+                  placeholder="Shahar, tuman yoki ko'chani kiriting"
+                  className="w-full h-11 pl-10 pr-3 rounded-xl bg-[#f3f4f6] border border-transparent text-sm text-[#111827] placeholder:text-[#9ca3af] focus:outline-none focus:border-[#8b5cf6] focus:bg-white"
+                />
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-[#a1a1aa]">Qabul qilish punkti</label>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-base font-semibold text-[#111827]">{dropOffPoints.length} ta qabul qilish joylari</p>
+                <p className="text-xs text-[#6b7280]">{orderIds.length} ta tanlangan</p>
+              </div>
+
               {dropOffQuery.isLoading ? (
-                <div className="h-11 rounded-xl bg-[#18181b] border border-[#27272a] animate-pulse" />
-              ) : !dropOffQuery.data?.length ? (
-                <div className="rounded-xl bg-[#f59e0b]/10 border border-[#f59e0b]/30 p-3 text-xs text-[#fbbf24]">
-                  Bu buyurtmalar uchun qabul punkti topilmadi. Buyurtmalar statusi PACKING bo'lishi kerak.
+                <div className="space-y-2">
+                  {[0, 1, 2, 3].map((i) => <div key={i} className="h-20 rounded-xl bg-[#f3f4f6] animate-pulse" />)}
+                </div>
+              ) : !dropOffPoints.length ? (
+                <div className="rounded-xl bg-[#fff7ed] border border-[#fed7aa] p-4 text-sm text-[#9a3412]">
+                  Bu buyurtmalar uchun mos qabul punkti topilmadi.
                 </div>
               ) : (
-                <select
-                  value={dropOffUuid}
-                  onChange={(e) => setDropOffUuid(e.target.value)}
-                  className="w-full h-11 px-3 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-white focus:outline-none focus:border-[#8b5cf6]"
-                >
-                  {dropOffQuery.data.map((point) => {
+                <div className="divide-y divide-[#e5e7eb]">
+                  {dropOffPoints.map((point, index) => {
                     const uuid = getDropOffUuid(point);
-                    return <option key={uuid} value={uuid}>{getDropOffLabel(point)}</option>;
+                    const active = uuid === dropOffUuid;
+                    return (
+                      <button
+                        key={uuid || index}
+                        onClick={() => setDropOffUuid(uuid)}
+                        className={cn("w-full text-left p-4 transition-colors", active ? "bg-[#f3f0ff] rounded-xl ring-1 ring-[#8b5cf6]/30" : "hover:bg-[#f9fafb]")}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span className={cn("mt-0.5 w-5 h-5 rounded-full border flex items-center justify-center", active ? "border-[#7c3aed] bg-[#7c3aed]" : "border-[#d1d5db]")}>
+                            {active && <Check className="w-3 h-3 text-white" />}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-[#111827] leading-snug">{getDropOffLabel(point)}</span>
+                            <span className="block text-xs text-[#6b7280] mt-1">{point?.type || point?.kind || "Qabul qilish punkti"}</span>
+                            <span className="block text-xs text-[#374151] mt-1">{point?.workTime || point?.schedule || "Har kuni 11:00 - 16:00"}</span>
+                          </span>
+                        </div>
+                      </button>
+                    );
                   })}
-                </select>
+                </div>
               )}
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-[#a1a1aa]">Vaqt oralig'i</label>
-              {timeSlotQuery.isLoading ? (
-                <div className="h-11 rounded-xl bg-[#18181b] border border-[#27272a] animate-pulse" />
-              ) : dropOffUuid && !timeSlotQuery.data?.length ? (
-                <div className="rounded-xl bg-[#f59e0b]/10 border border-[#f59e0b]/30 p-3 text-xs text-[#fbbf24]">
-                  Bu punkt uchun bo'sh time-slot topilmadi. Boshqa punktni tanlang yoki keyinroq urinib ko'ring.
+            <div className="bg-[#f8fafc] p-4 sm:p-5 overflow-y-auto scrollbar-thin">
+              <div className="rounded-2xl bg-white border border-[#e5e7eb] p-4 mb-4">
+                <p className="text-[11px] uppercase tracking-wider text-[#6b7280] font-semibold mb-2">Tanlangan buyurtmalar</p>
+                <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto scrollbar-thin">
+                  {orders.map((order) => (
+                    <span key={order.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#f3f4f6] text-xs font-mono text-[#374151]">
+                      <Hash className="w-3 h-3 text-[#9ca3af]" />
+                      {order.publicId || order.id}
+                    </span>
+                  ))}
                 </div>
-              ) : (
-                <select
-                  value={timeSlotUuid}
-                  onChange={(e) => setTimeSlotUuid(e.target.value)}
-                  disabled={!dropOffUuid}
-                  className="w-full h-11 px-3 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-white focus:outline-none focus:border-[#8b5cf6] disabled:opacity-50"
-                >
-                  {(timeSlotQuery.data || []).map((slot) => {
-                    const uuid = getTimeSlotUuid(slot);
-                    return <option key={uuid} value={uuid}>{fmtSlot(slot?.timeFrom, slot?.timeTo)}</option>;
-                  })}
-                </select>
-              )}
+              </div>
+
+              <div className="rounded-2xl bg-white border border-[#e5e7eb] p-4 min-h-[320px]">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                  <div>
+                    <p className="text-base font-semibold text-[#111827]">Ta'minlash vaqtini tanlang <span className="text-[#ef4444]">*</span></p>
+                    {selectedPoint && <p className="text-xs text-[#6b7280] mt-1 line-clamp-1">{getDropOffLabel(selectedPoint)}</p>}
+                  </div>
+                  {timeSlotQuery.isFetching && <Loader2 className="w-4 h-4 text-[#7c3aed] animate-spin" />}
+                </div>
+
+                {!dropOffUuid ? (
+                  <div className="h-64 flex items-center justify-center text-center text-sm text-[#9ca3af]">
+                    Ta'minlash uchun bo'sh sana va vaqtni ko'rish uchun qabul qilish punktini tanlang
+                  </div>
+                ) : timeSlotQuery.isLoading ? (
+                  <div className="space-y-3">
+                    {[0, 1, 2].map((i) => <div key={i} className="h-14 rounded-xl bg-[#f3f4f6] animate-pulse" />)}
+                  </div>
+                ) : !groupedSlots.length ? (
+                  <div className="h-64 flex items-center justify-center text-center text-sm text-[#9ca3af]">
+                    Bu punkt uchun bo'sh time-slot topilmadi
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {groupedSlots.map(([dateLabel, slots]) => (
+                      <div key={dateLabel}>
+                        <div className="flex items-center justify-between text-sm font-semibold text-[#111827] pb-2 border-b border-[#e5e7eb]">
+                          <span>{dateLabel}</span>
+                          <span className="text-xs text-[#374151]">Yuborish mumkin</span>
+                        </div>
+                        <div className="divide-y divide-[#f3f4f6]">
+                          {slots.map((slot) => {
+                            const uuid = getTimeSlotUuid(slot);
+                            const active = uuid === timeSlotUuid;
+                            const amount = slot?.amount ?? slot?.availableOrders ?? slot?.limit ?? null;
+                            return (
+                              <button key={uuid} onClick={() => setTimeSlotUuid(uuid)} className="w-full flex items-center justify-between gap-3 py-3 text-left">
+                                <span className="flex items-center gap-3">
+                                  <span className={cn("w-5 h-5 rounded-full border flex items-center justify-center", active ? "border-[#7c3aed] bg-[#7c3aed]" : "border-[#d1d5db]")}>
+                                    {active && <Check className="w-3 h-3 text-white" />}
+                                  </span>
+                                  <span className="text-sm text-[#111827]">{shortTimeRange(slot?.timeFrom, slot?.timeTo)}</span>
+                                </span>
+                                {amount != null && (
+                                  <span className="min-w-8 h-6 px-2 rounded-full bg-[#bbf7d0] text-[#166534] text-xs font-bold flex items-center justify-center">
+                                    {amount}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          <div className="sticky bottom-0 bg-[#0a0a0f] border-t border-[#1c1c24] p-4 flex flex-col sm:flex-row gap-2 sm:justify-end">
-            <button onClick={onClose} className="px-4 py-2.5 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-[#a1a1aa] hover:text-white">
+          <div className="bg-white border-t border-[#e5e7eb] p-4 flex flex-col sm:flex-row gap-2 sm:justify-end">
+            <button onClick={onClose} className="px-4 py-2.5 rounded-xl bg-[#f3f4f6] text-sm font-semibold text-[#374151] hover:bg-[#e5e7eb]">
               Bekor qilish
             </button>
             <button
               onClick={submit}
               disabled={!canCreate}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] text-white text-sm font-semibold disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#7c3aed] hover:bg-[#6d28d9] text-white text-sm font-semibold disabled:opacity-50"
             >
               {createInvoice.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-              Ta'minlash yaratish
+              Yaratish va ta'minlashga o'tish
             </button>
           </div>
         </motion.div>
@@ -1711,6 +1854,13 @@ export default function OrdersPage() {
   // Confirm button only on CREATED (Yangilar) tab
   const showConfirmForActive = activeTabId === "CREATED";
   const canCreateInvoiceForActive = activeTabId === "PACKING";
+  const dueTodayCount = useMemo(() => orders.filter((order: any) => isOrderDueOn(order, 0)).length, [orders]);
+  const dueTomorrowCount = useMemo(() => orders.filter((order: any) => isOrderDueOn(order, 1)).length, [orders]);
+  const dueAfterTomorrowCount = useMemo(() => orders.filter((order: any) => isOrderDueOn(order, 2)).length, [orders]);
+  const selectInvoiceOrders = (filter?: (order: any) => boolean) => {
+    const next = filter ? orders.filter(filter) : orders;
+    setSelectedOrderIds(new Set<string | number>(next.map((order: any) => order.id)));
+  };
 
   // Batch print on the active orders list
   const { printBatch: printAllOnPage, isLoading: pagePrinting, progress: pageProgress } = usePrintBatchLabels();
@@ -1850,30 +2000,53 @@ export default function OrdersPage() {
           {!isLoading && orders.length > 0 && (
             <>
               {(showPrintLabelForActive || showConfirmForActive || canCreateInvoiceForActive) && (
-                <div className="flex justify-end gap-2 flex-wrap">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-end gap-3">
                   {canCreateInvoiceForActive && (
-                    <>
-                      <button
-                        onClick={() => {
-                          const next = selectedOrderIds.size === orders.length
-                            ? new Set<string | number>()
-                            : new Set<string | number>(orders.map((o: any) => o.id));
-                          setSelectedOrderIds(next);
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0f0f16] border border-[#1c1c24] text-[#a1a1aa] hover:text-white hover:border-[#27272a] text-xs font-semibold transition-all"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        {selectedOrderIds.size === orders.length ? "Tanlovni tozalash" : "Sahifani tanlash"}
-                      </button>
-                      <button
-                        onClick={() => setCreateInvoiceOpen(true)}
-                        disabled={selectedOrders.length === 0}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] hover:from-[#9d70f8] hover:to-[#7c3aed] text-white text-xs font-semibold transition-all disabled:opacity-50 shadow-lg shadow-[#8b5cf6]/20"
-                      >
-                        <FileText className="w-3.5 h-3.5" />
-                        Ta'minlash yaratish ({selectedOrders.length})
-                      </button>
-                    </>
+                    <div className="rounded-2xl bg-[#0f0f16] border border-[#1c1c24] p-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3 flex-1">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Ta'minlash uchun tanlash</p>
+                        <p className="text-xs text-[#71717a] mt-0.5">
+                          {selectedOrders.length} ta tanlandi · muddat bo'yicha yoki sahifadagi hammasini tanlang
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {[
+                          { label: "Hammasi", count: orders.length, action: () => selectInvoiceOrders() },
+                          { label: "Bugun", count: dueTodayCount, action: () => selectInvoiceOrders((order) => isOrderDueOn(order, 0)) },
+                          { label: "Ertaga", count: dueTomorrowCount, action: () => selectInvoiceOrders((order) => isOrderDueOn(order, 1)) },
+                          { label: "Indin", count: dueAfterTomorrowCount, action: () => selectInvoiceOrders((order) => isOrderDueOn(order, 2)) },
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            onClick={preset.action}
+                            disabled={preset.count === 0}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#18181b] border border-[#27272a] text-[#e5e7eb] hover:border-[#8b5cf6]/60 hover:text-white text-xs font-semibold transition-all disabled:opacity-40 disabled:hover:border-[#27272a]"
+                          >
+                            <Check className="w-3.5 h-3.5 text-[#8b5cf6]" />
+                            {preset.label}
+                            <span className="min-w-5 h-5 px-1.5 rounded-full bg-[#27272a] text-[11px] text-white flex items-center justify-center">
+                              {preset.count}
+                            </span>
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => setSelectedOrderIds(new Set())}
+                          disabled={selectedOrders.length === 0}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-transparent border border-[#27272a] text-[#a1a1aa] hover:text-white text-xs font-semibold transition-all disabled:opacity-40"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          Tozalash
+                        </button>
+                        <button
+                          onClick={() => setCreateInvoiceOpen(true)}
+                          disabled={selectedOrders.length === 0}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] hover:from-[#9d70f8] hover:to-[#7c3aed] text-white text-xs font-semibold transition-all disabled:opacity-50 shadow-lg shadow-[#8b5cf6]/20"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Ta'minlash yaratish ({selectedOrders.length})
+                        </button>
+                      </div>
+                    </div>
                   )}
                   {showPrintLabelForActive && (
                     <>
