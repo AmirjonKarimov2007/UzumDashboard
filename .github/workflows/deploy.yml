@@ -1,0 +1,65 @@
+# Auto-deploy: master'ga push qilinganda serverda avtomatik yangilanadi.
+#
+# ─── BIR MARTALIK SOZLASH (serverda) ──────────────────────────────────────
+# 1. Reponi serverga bir marta klon qiling va PROD .env fayllarini joylang:
+#      git clone https://github.com/AmirjonKarimov2007/UzumDashboard.git
+#      # services/auth/.env va (kerak bo'lsa) web/.env ni to'ldiring
+# 2. Node 20+ va PM2 o'rnating:  npm i -g pm2
+# 3. Self-hosted runner o'rnating:
+#      GitHub → repo → Settings → Actions → Runners → New self-hosted runner
+#      ko'rsatmalarni bajaring, so'ng runnerni xizmat (service) sifatida ishga tushiring:
+#        ./svc.sh install && ./svc.sh start     (Linux)
+#        # Windows: run.cmd yoki "Install service" varianti
+# 4. Repo Variables (Settings → Secrets and variables → Actions → Variables):
+#      DEPLOY_DIR            = serverdagi klon yo'li (mas: /home/user/UzumDashboard)
+#      NEXT_PUBLIC_API_URL   = public API manzili (mas: https://api.sizningdomen.uz)
+#
+# Shundan keyin har push avtomatik: git pull → build → migrate → pm2 reload.
+
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+# Bir vaqtning o'zida faqat bitta deploy ishlasin (ustma-ust tushmasin).
+concurrency:
+  group: deploy-master
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted]
+    steps:
+      - name: Pull, build, migrate, restart
+        shell: bash
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+          NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+        run: |
+          set -euo pipefail
+          DIR="${DEPLOY_DIR:-$HOME/UzumDashboard}"
+          echo "▶ Deploy: $DIR"
+          cd "$DIR"
+
+          # Eng so'nggi kodni olish (lokal o'zgarishlarni bekor qiladi)
+          git fetch --all --prune
+          git reset --hard origin/master
+
+          # Backend: bog'liqliklar, prisma, migratsiya, build
+          ( cd services/auth \
+              && npm ci \
+              && npx prisma generate \
+              && npx prisma migrate deploy \
+              && npm run build )
+
+          # Frontend: bog'liqliklar va build (NEXT_PUBLIC_* build paytida inline bo'ladi)
+          ( cd web \
+              && npm ci \
+              && npm run build )
+
+          # PM2 bilan qayta ishga tushirish (reload = uzilishsiz; bo'lmasa start)
+          pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
+          pm2 save
+          echo "✅ Deploy tugadi"

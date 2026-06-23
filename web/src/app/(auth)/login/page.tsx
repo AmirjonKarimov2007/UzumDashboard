@@ -34,8 +34,15 @@ export default function LoginPage() {
   const [resendTimer, setResendTimer] = useState(0);
   const [devCode, setDevCode] = useState<string | null>(null);
 
-  // Telegram WebApp avto-login holati
-  const [tgPhase, setTgPhase] = useState<"idle" | "checking" | "not-linked">("idle");
+  // Telegram WebApp avto-login holati. Telegram ichida ochilgan bo'lsa, darhol
+  // "checking" bilan boshlaymiz — telefon formasi bir lahza ko'rinib ketmasligi uchun.
+  const [tgPhase, setTgPhase] = useState<"idle" | "checking" | "not-linked">(() => {
+    if (typeof window !== "undefined") {
+      const tg = (window as any).Telegram?.WebApp;
+      if (tg && tg.initData && tg.platform !== "unknown") return "checking";
+    }
+    return "idle";
+  });
   const tgInitData = useRef<string | null>(null);
   const tgTried = useRef(false);
 

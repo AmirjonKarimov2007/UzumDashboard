@@ -198,15 +198,45 @@ export class AuthService {
     }
 
     // Bot'da telefon ulashganda saqlangan bog'lanish (chatId === telegram user id)
-    const link = await this.prisma.telegramUser.findFirst({
+    let link = await this.prisma.telegramUser.findFirst({
       where: { chatId: String(tgUser.id), isActive: true },
       include: { user: true },
     });
+
+    // Bog'lanish yo'q bo'lsa — egasi (admin yoki yagona foydalanuvchi) uchun
+    // hech narsa so'ramasdan avtomatik bog'laymiz. Noma'lum foydalanuvchi uchun
+    // (ko'p-foydalanuvchili tizimda) telefon orqali kirishga qaytaramiz.
     if (!link) {
-      // Telefon hali botga ulanmagan — frontend kontakt ulashishni so'raydi
-      throw new NotFoundException('telegram_not_linked');
+      const ownerId = await this.resolveTelegramOwner(tgUser);
+      if (!ownerId) {
+        throw new NotFoundException('telegram_not_linked');
+      }
+      const owner = await this.prisma.user.findUnique({ where: { id: ownerId } });
+      await this.prisma.telegramUser.upsert({
+        where: { userId: ownerId },
+        create: {
+          userId: ownerId,
+          chatId: String(tgUser.id),
+          phone: owner?.phone ?? `tg:${tgUser.id}`,
+          username: tgUser.username ?? null,
+          firstName: tgUser.first_name ?? null,
+          lastName: tgUser.last_name ?? null,
+        },
+        update: {
+          chatId: String(tgUser.id),
+          isActive: true,
+          username: tgUser.username ?? null,
+          firstName: tgUser.first_name ?? null,
+          lastName: tgUser.last_name ?? null,
+        },
+      });
+      link = await this.prisma.telegramUser.findFirst({
+        where: { userId: ownerId },
+        include: { user: true },
+      });
     }
-    if (!link.user.isActive) {
+
+    if (!link || !link.user.isActive) {
       throw new UnauthorizedException('Account is deactivated');
     }
 
@@ -232,6 +262,60 @@ export class AuthService {
       device: dto.device ?? { type: 'telegram' },
       ipAddress: dto.ipAddress,
       userAgent: dto.userAgent,
+    });
+  }
+
+  /**
+   * Telegram WebApp orqali kirgan foydalanuvchi qaysi akkauntga ulanishini
+   * aniqlaydi (telefon so'ramasdan):
+   *  - TELEGRAM_ADMIN_ID bilan mos kelsa → egasi akkaunti (do'koni bor eng eski
+   *    foydalanuvchi, bo'lmasa eng eski, bo'lmasa yangi akkaunt yaratiladi);
+   *  - tizimda atigi 1 foydalanuvchi bo'lsa → o'sha (aniq egasi);
+   *  - aks holda null (noma'lum foydalanuvchi → telefon orqali kirish).
+   */
+  private async resolveTelegramOwner(tgUser: any): Promise<string | null> {
+    const adminId =
+      this.config.get<string>('TELEGRAM_ADMIN_ID') || process.env.TELEGRAM_ADMIN_ID;
+    const isAdmin = !!adminId && String(tgUser.id) === String(adminId);
+
+    if (isAdmin) {
+      const withStore = await this.prisma.user.findFirst({
+        where: { stores: { some: {} } },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (withStore) return withStore.id;
+      const earliest = await this.prisma.user.findFirst({ orderBy: { createdAt: 'asc' } });
+      if (earliest) return earliest.id;
+      const created = await this.createTelegramOwner(tgUser);
+      return created.id;
+    }
+
+    // Yagona foydalanuvchili tizim — o'sha foydalanuvchi egasi
+    const count = await this.prisma.user.count();
+    if (count === 1) {
+      const only = await this.prisma.user.findFirst();
+      return only?.id ?? null;
+    }
+
+    return null;
+  }
+
+  /** Telegram identifikatori asosida yangi egasi akkaunti + do'kon yaratadi
+   *  (bo'sh bazada admin birinchi marta kirganda). Telefon placeholder: tg:<id>. */
+  private async createTelegramOwner(tgUser: any) {
+    const name =
+      [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') ||
+      tgUser.username ||
+      'Telegram foydalanuvchi';
+    return this.prisma.user.create({
+      data: {
+        phone: `tg:${tgUser.id}`,
+        name,
+        isActive: true,
+        stores: {
+          create: { name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' },
+        },
+      },
     });
   }
 

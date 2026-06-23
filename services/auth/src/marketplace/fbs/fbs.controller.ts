@@ -95,7 +95,7 @@ class UpdatePricesDto {
 
 class CreateInvoiceDto {
   @IsArray()
-  orderIds!: number[];
+  orderIds!: Array<number | string>;
 
   @IsString()
   dropOffPointUuid!: string;
@@ -103,8 +103,9 @@ class CreateInvoiceDto {
   @IsString()
   timeSlotUuid!: string;
 
+  @IsOptional()
   @IsNumber()
-  sellerId!: number;
+  sellerId?: number;
 
   @IsOptional()
   @IsString()
@@ -355,7 +356,7 @@ export class FbsController {
   getDropOffPoints(
     @CurrentUser('id') userId: string,
     @Param('storeId') storeId: string,
-    @Query('orderIds') orderIds: string,
+    @Query('orderIds') orderIds?: string,
   ) {
     const ids = (orderIds || '').split(',').filter(Boolean);
     return this.fbsService.getInvoiceDropOffPoints(userId, storeId, ids);
@@ -366,11 +367,12 @@ export class FbsController {
   getTimeSlots(
     @CurrentUser('id') userId: string,
     @Param('storeId') storeId: string,
-    @Query('dopId') dopId: string,
-    @Query('orderIds') orderIds: string,
+    @Query('dopId') dopId?: string,
+    @Query('dropOffPointUuid') dropOffPointUuid?: string,
+    @Query('orderIds') orderIds?: string,
   ) {
     const ids = (orderIds || '').split(',').filter(Boolean);
-    return this.fbsService.getInvoiceTimeSlots(userId, storeId, dopId, ids);
+    return this.fbsService.getInvoiceTimeSlots(userId, storeId, dopId || dropOffPointUuid || '', ids);
   }
 
   /** Full product-level analytics (aggregated, cached 5 min) */

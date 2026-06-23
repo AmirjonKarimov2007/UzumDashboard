@@ -310,16 +310,26 @@ export class FbsService {
     return this.uzumClient.getFbsInvoiceDropOffPoints(storeId, apiKey, orderIds);
   }
   async getInvoiceTimeSlots(userId: string, storeId: string, dopId: string, orderIds: (number | string)[]) {
+    if (!dopId) return [];
     const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
     return this.uzumClient.getFbsInvoiceTimeSlots(storeId, apiKey, dopId, orderIds);
   }
   async createInvoice(
     userId: string,
     storeId: string,
-    body: { orderIds: number[]; dropOffPointUuid: string; timeSlotUuid: string; sellerId: number; idempotencyKey?: string },
+    body: { orderIds: Array<number | string>; dropOffPointUuid: string; timeSlotUuid: string; sellerId?: number; idempotencyKey?: string },
   ) {
-    const { apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
-    const r = await this.uzumClient.createFbsInvoice(storeId, apiKey, body);
+    const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
+    const orderIds = body.orderIds.map((id) => {
+      const n = Number(id);
+      return Number.isFinite(n) ? n : id;
+    });
+    const sellerId = body.sellerId ?? Number(uzumShopId);
+    const r = await this.uzumClient.createFbsInvoice(storeId, apiKey, {
+      ...body,
+      orderIds,
+      sellerId: Number.isFinite(sellerId) ? sellerId : undefined,
+    });
     this.expireCounts();
     return r;
   }

@@ -13,7 +13,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/shared/page-header";
 import { formatCurrency } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-import { useFbsOrders, useFbsOrderCounts, useFbsInvoices, useFbsInvoiceOrders, useConfirmFbsOrder, useCancelFbsOrder, useFbsReturnReasons, useDbsOrderAction } from "@/hooks/use-orders";
+import { useFbsOrders, useFbsOrderCounts, useFbsInvoices, useFbsInvoiceOrders, useConfirmFbsOrder, useCancelFbsOrder, useFbsReturnReasons, useDbsOrderAction, useFbsInvoiceDropOffPoints, useFbsInvoiceTimeSlots, useCreateFbsInvoice } from "@/hooks/use-orders";
 import { useSyncStatus } from "@/hooks/use-sync";
 import { useAuthStore } from "@/stores/auth-store";
 import { useDashboardStore } from "@/stores/dashboard-store";
@@ -241,6 +241,18 @@ function fmtSlot(fromMs?: number | null, toMs?: number | null): string {
 /** To'liq summa (qisqartmasdan), minglik ajratgich bilan: 1 243 275 so'm. */
 function fmtSom(n?: number | null): string {
   return `${new Intl.NumberFormat("uz-UZ").format(Math.round(Number(n) || 0))} so'm`;
+}
+
+function getDropOffUuid(point: any): string {
+  return String(point?.uuid ?? point?.id ?? point?.dropOffPointUuid ?? point?.dopId ?? "");
+}
+
+function getDropOffLabel(point: any): string {
+  return point?.address || point?.name || point?.title || point?.stock?.title || getDropOffUuid(point);
+}
+
+function getTimeSlotUuid(slot: any): string {
+  return String(slot?.uuid ?? slot?.id ?? slot?.timeSlotUuid ?? "");
 }
 
 function CopyableId({ value, label }: { value: string | number; label?: string }) {
@@ -791,7 +803,182 @@ function DbsActions({ order, onDone }: { order: any; onDone?: () => void }) {
   );
 }
 
-function OrderRow({ order, onClick, index, showPrintLabel, showConfirm }: { order: any; onClick: () => void; index: number; showPrintLabel?: boolean; showConfirm?: boolean }) {
+function CreateInvoiceModal({
+  open,
+  orders,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  orders: any[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const orderIds = useMemo(() => orders.map((o) => o.id).filter(Boolean), [orders]);
+  const [dropOffUuid, setDropOffUuid] = useState("");
+  const [timeSlotUuid, setTimeSlotUuid] = useState("");
+  const dropOffQuery = useFbsInvoiceDropOffPoints(orderIds, open);
+  const timeSlotQuery = useFbsInvoiceTimeSlots(dropOffUuid || null, orderIds, open);
+  const createInvoice = useCreateFbsInvoice();
+
+  useEffect(() => {
+    setDropOffUuid("");
+    setTimeSlotUuid("");
+  }, [open, orderIds.join(",")]);
+
+  useEffect(() => {
+    const first = dropOffQuery.data?.[0];
+    if (!dropOffUuid && first) setDropOffUuid(getDropOffUuid(first));
+  }, [dropOffQuery.data, dropOffUuid]);
+
+  useEffect(() => {
+    setTimeSlotUuid("");
+  }, [dropOffUuid]);
+
+  useEffect(() => {
+    const first = timeSlotQuery.data?.[0];
+    if (!timeSlotUuid && first) setTimeSlotUuid(getTimeSlotUuid(first));
+  }, [timeSlotQuery.data, timeSlotUuid]);
+
+  if (!open) return null;
+
+  const totalQty = orders.reduce(
+    (sum, order) => sum + (order.orderItems || []).reduce((n: number, item: any) => n + (Number(item.amount) || 1), 0),
+    0,
+  );
+  const canCreate = orderIds.length > 0 && dropOffUuid && timeSlotUuid && !createInvoice.isPending;
+
+  const submit = () => {
+    if (!canCreate) {
+      toast.error("Qabul punkti va vaqt oralig'ini tanlang");
+      return;
+    }
+    createInvoice.mutate(
+      { orderIds, dropOffPointUuid: dropOffUuid, timeSlotUuid },
+      { onSuccess: (data) => { if (data.ok) { onCreated(); onClose(); } } },
+    );
+  };
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[70] bg-black/75 flex items-end sm:items-center justify-center p-0 sm:p-4"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ y: 24, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 24, opacity: 0 }}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full sm:max-w-2xl max-h-[92dvh] overflow-y-auto scrollbar-thin rounded-t-2xl sm:rounded-2xl bg-[#0a0a0f] border border-[#1c1c24] shadow-2xl"
+        >
+          <div className="sticky top-0 z-10 bg-[#0a0a0f] border-b border-[#1c1c24] p-4 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-white">Ta'minlash yaratish</p>
+              <p className="text-xs text-[#71717a] mt-0.5">{orderIds.length} buyurtma · {totalQty} dona mahsulot</p>
+            </div>
+            <button onClick={onClose} className="w-9 h-9 rounded-lg bg-[#18181b] hover:bg-[#27272a] flex items-center justify-center">
+              <X className="w-4 h-4 text-[#a1a1aa]" />
+            </button>
+          </div>
+
+          <div className="p-4 space-y-4">
+            <div className="rounded-xl bg-[#0f0f16] border border-[#1c1c24] p-3">
+              <p className="text-[11px] uppercase tracking-wider text-[#71717a] font-semibold mb-2">Tanlangan buyurtmalar</p>
+              <div className="flex flex-wrap gap-2">
+                {orders.map((order) => (
+                  <CopyableId key={order.id} value={order.publicId || order.id} label="Order" />
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-[#a1a1aa]">Qabul qilish punkti</label>
+              {dropOffQuery.isLoading ? (
+                <div className="h-11 rounded-xl bg-[#18181b] border border-[#27272a] animate-pulse" />
+              ) : !dropOffQuery.data?.length ? (
+                <div className="rounded-xl bg-[#f59e0b]/10 border border-[#f59e0b]/30 p-3 text-xs text-[#fbbf24]">
+                  Bu buyurtmalar uchun qabul punkti topilmadi. Buyurtmalar statusi PACKING bo'lishi kerak.
+                </div>
+              ) : (
+                <select
+                  value={dropOffUuid}
+                  onChange={(e) => setDropOffUuid(e.target.value)}
+                  className="w-full h-11 px-3 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-white focus:outline-none focus:border-[#8b5cf6]"
+                >
+                  {dropOffQuery.data.map((point) => {
+                    const uuid = getDropOffUuid(point);
+                    return <option key={uuid} value={uuid}>{getDropOffLabel(point)}</option>;
+                  })}
+                </select>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-[#a1a1aa]">Vaqt oralig'i</label>
+              {timeSlotQuery.isLoading ? (
+                <div className="h-11 rounded-xl bg-[#18181b] border border-[#27272a] animate-pulse" />
+              ) : dropOffUuid && !timeSlotQuery.data?.length ? (
+                <div className="rounded-xl bg-[#f59e0b]/10 border border-[#f59e0b]/30 p-3 text-xs text-[#fbbf24]">
+                  Bu punkt uchun bo'sh time-slot topilmadi. Boshqa punktni tanlang yoki keyinroq urinib ko'ring.
+                </div>
+              ) : (
+                <select
+                  value={timeSlotUuid}
+                  onChange={(e) => setTimeSlotUuid(e.target.value)}
+                  disabled={!dropOffUuid}
+                  className="w-full h-11 px-3 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-white focus:outline-none focus:border-[#8b5cf6] disabled:opacity-50"
+                >
+                  {(timeSlotQuery.data || []).map((slot) => {
+                    const uuid = getTimeSlotUuid(slot);
+                    return <option key={uuid} value={uuid}>{fmtSlot(slot?.timeFrom, slot?.timeTo)}</option>;
+                  })}
+                </select>
+              )}
+            </div>
+          </div>
+
+          <div className="sticky bottom-0 bg-[#0a0a0f] border-t border-[#1c1c24] p-4 flex flex-col sm:flex-row gap-2 sm:justify-end">
+            <button onClick={onClose} className="px-4 py-2.5 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-[#a1a1aa] hover:text-white">
+              Bekor qilish
+            </button>
+            <button
+              onClick={submit}
+              disabled={!canCreate}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] text-white text-sm font-semibold disabled:opacity-50"
+            >
+              {createInvoice.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+              Ta'minlash yaratish
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+function OrderRow({
+  order,
+  onClick,
+  index,
+  showPrintLabel,
+  showConfirm,
+  selectable,
+  selected,
+  onSelectionChange,
+}: {
+  order: any;
+  onClick: () => void;
+  index: number;
+  showPrintLabel?: boolean;
+  showConfirm?: boolean;
+  selectable?: boolean;
+  selected?: boolean;
+  onSelectionChange?: (checked: boolean) => void;
+}) {
   const items = order.orderItems || [];
   const firstItem = items[0] || {};
   const firstPhoto = firstItem.photo?.photo?.["240"]?.high || firstItem.photo?.photo?.["240"]?.low;
@@ -813,6 +1000,26 @@ function OrderRow({ order, onClick, index, showPrintLabel, showConfirm }: { orde
       className="animate-fade-in cv-auto rounded-xl bg-[#0f0f16] border border-[#1c1c24] hover:border-[#3f3f46] hover:bg-[#13131a] hover:shadow-lg transition-all cursor-pointer p-5"
     >
       <div className="flex flex-col md:flex-row md:items-center gap-4">
+        {selectable && (
+          <label
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              "w-9 h-9 rounded-lg border flex items-center justify-center cursor-pointer transition-all",
+              selected
+                ? "bg-[#8b5cf6]/20 border-[#8b5cf6] text-[#a78bfa]"
+                : "bg-[#18181b] border-[#27272a] text-[#52525b] hover:border-[#3f3f46]"
+            )}
+            title="Ta'minlash uchun tanlash"
+          >
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={(e) => onSelectionChange?.(e.target.checked)}
+              className="sr-only"
+            />
+            {selected ? <Check className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+          </label>
+        )}
         <div className="flex-shrink-0 relative">
           <div className="w-[72px] h-[72px] rounded-xl bg-[#18181b] overflow-hidden flex items-center justify-center ring-1 ring-[#27272a]">
             {firstPhoto ? (
@@ -1429,6 +1636,8 @@ export default function OrdersPage() {
   const [page, setPage] = useState(0);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string | number>>(new Set());
+  const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [scheme, setScheme] = useState<"ALL" | "FBS" | "DBS">("ALL");
   const pageSize = 20;
 
@@ -1445,6 +1654,7 @@ export default function OrdersPage() {
   }, []);
   useEffect(() => { localStorage.setItem("orders-tab", activeTabId); }, [activeTabId]);
   useEffect(() => { localStorage.setItem("orders-section", section); }, [section]);
+  useEffect(() => { setSelectedOrderIds(new Set()); }, [activeTabId, page, scheme, section]);
 
   // Invoices section
   const { data: invoicesData, isLoading: invoicesLoading, isFetching: invoicesFetching, refetch: refetchInvoices } = useFbsInvoices({
@@ -1477,6 +1687,10 @@ export default function OrdersPage() {
       return db - da;
     });
   }, [rawOrders, activeTabId]);
+  const selectedOrders = useMemo(
+    () => orders.filter((order: any) => selectedOrderIds.has(order.id)),
+    [orders, selectedOrderIds],
+  );
   const activeCount = tabCount(activeTab);
   const totalPages = Math.max(1, Math.ceil(activeCount / pageSize));
 
@@ -1496,6 +1710,7 @@ export default function OrdersPage() {
   const showPrintLabelForActive = showPrintLabelOnTabs.has(activeTabId);
   // Confirm button only on CREATED (Yangilar) tab
   const showConfirmForActive = activeTabId === "CREATED";
+  const canCreateInvoiceForActive = activeTabId === "PACKING";
 
   // Batch print on the active orders list
   const { printBatch: printAllOnPage, isLoading: pagePrinting, progress: pageProgress } = usePrintBatchLabels();
@@ -1634,8 +1849,32 @@ export default function OrdersPage() {
 
           {!isLoading && orders.length > 0 && (
             <>
-              {(showPrintLabelForActive || showConfirmForActive) && (
+              {(showPrintLabelForActive || showConfirmForActive || canCreateInvoiceForActive) && (
                 <div className="flex justify-end gap-2 flex-wrap">
+                  {canCreateInvoiceForActive && (
+                    <>
+                      <button
+                        onClick={() => {
+                          const next = selectedOrderIds.size === orders.length
+                            ? new Set<string | number>()
+                            : new Set<string | number>(orders.map((o: any) => o.id));
+                          setSelectedOrderIds(next);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0f0f16] border border-[#1c1c24] text-[#a1a1aa] hover:text-white hover:border-[#27272a] text-xs font-semibold transition-all"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        {selectedOrderIds.size === orders.length ? "Tanlovni tozalash" : "Sahifani tanlash"}
+                      </button>
+                      <button
+                        onClick={() => setCreateInvoiceOpen(true)}
+                        disabled={selectedOrders.length === 0}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] hover:from-[#9d70f8] hover:to-[#7c3aed] text-white text-xs font-semibold transition-all disabled:opacity-50 shadow-lg shadow-[#8b5cf6]/20"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Ta'minlash yaratish ({selectedOrders.length})
+                      </button>
+                    </>
+                  )}
                   {showPrintLabelForActive && (
                     <>
                       <button
@@ -1692,6 +1931,16 @@ export default function OrdersPage() {
                     onClick={() => setSelectedOrder(order)}
                     showPrintLabel={showPrintLabelForActive}
                     showConfirm={showConfirmForActive}
+                    selectable={canCreateInvoiceForActive}
+                    selected={selectedOrderIds.has(order.id)}
+                    onSelectionChange={(checked) => {
+                      setSelectedOrderIds((prev) => {
+                        const next = new Set(prev);
+                        if (checked) next.add(order.id);
+                        else next.delete(order.id);
+                        return next;
+                      });
+                    }}
                   />
                 ))}
               </div>
@@ -1752,6 +2001,16 @@ export default function OrdersPage() {
 
       <OrderDetailModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />
       <InvoiceDetailModal invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} />
+      <CreateInvoiceModal
+        open={createInvoiceOpen}
+        orders={selectedOrders}
+        onClose={() => setCreateInvoiceOpen(false)}
+        onCreated={() => {
+          setSelectedOrderIds(new Set());
+          setSection("invoices");
+          refetchInvoices();
+        }}
+      />
     </div>
   );
 }

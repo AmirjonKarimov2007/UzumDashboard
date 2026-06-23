@@ -1095,9 +1095,22 @@ export class UzumApiClient {
   async createFbsInvoice(
     storeId: string,
     apiKey: string,
-    body: { orderIds: number[]; dropOffPointUuid: string; timeSlotUuid: string; sellerId: number; idempotencyKey?: string },
+    body: { orderIds: Array<number | string>; dropOffPointUuid: string; timeSlotUuid: string; sellerId?: number; idempotencyKey?: string },
   ): Promise<{ ok: boolean; payload?: any; error?: string; code?: string }> {
-    return this.postAction(apiKey, '/v1/fbs/invoice', body);
+    const normalized = {
+      ...body,
+      orderIds: body.orderIds.map((id) => {
+        const n = Number(id);
+        return Number.isFinite(n) ? n : id;
+      }),
+    };
+    const first = await this.postAction(apiKey, '/v1/fbs/invoice', normalized);
+    if (first.ok) return first;
+
+    return this.postAction(apiKey, '/v1/fbs/invoice', {
+      ...normalized,
+      customerOrderIds: normalized.orderIds,
+    });
   }
 
   /** Cancel a supply invoice. */
@@ -1118,10 +1131,13 @@ export class UzumApiClient {
   /** Drop-off points suitable for the given orders. */
   async getFbsInvoiceDropOffPoints(storeId: string, apiKey: string, customerOrderIds: (number | string)[]): Promise<any[]> {
     const client = this.buildClient(apiKey);
-    const qs = customerOrderIds.map((id) => `customerOrderIds=${encodeURIComponent(String(id))}`).join('&');
+    const ids = customerOrderIds.filter((id) => String(id).trim().length > 0);
+    if (!ids.length) return [];
+    const qs = ids.map((id) => `customerOrderIds=${encodeURIComponent(String(id))}`).join('&');
     try {
       const response = await client.get(`/v1/fbs/invoice/dop/drop-off-points?${qs}`, { timeout: 12_000 });
-      return response.data?.payload?.dropOffPoints || [];
+      const payload = response.data?.payload;
+      return payload?.dropOffPoints || payload || [];
     } catch (err: any) {
       this.logger.warn(`dropOffPoints failed: ${err?.message}`);
       return [];
@@ -1136,13 +1152,23 @@ export class UzumApiClient {
     sellerOrderIds: (number | string)[],
   ): Promise<any[]> {
     const client = this.buildClient(apiKey);
-    const qs = [`dopId=${encodeURIComponent(dopId)}`, ...sellerOrderIds.map((id) => `sellerOrderIds=${encodeURIComponent(String(id))}`)].join('&');
+    const ids = sellerOrderIds.filter((id) => String(id).trim().length > 0);
+    if (!dopId || !ids.length) return [];
+    const buildQs = (key: 'sellerOrderIds' | 'customerOrderIds') =>
+      [`dopId=${encodeURIComponent(dopId)}`, ...ids.map((id) => `${key}=${encodeURIComponent(String(id))}`)].join('&');
     try {
-      const response = await client.get(`/v1/fbs/invoice/dop/time-slot?${qs}`, { timeout: 12_000 });
-      return response.data?.payload?.timeSlots || [];
+      const response = await client.get(`/v1/fbs/invoice/dop/time-slot?${buildQs('sellerOrderIds')}`, { timeout: 12_000 });
+      const payload = response.data?.payload;
+      return payload?.timeSlots || payload || [];
     } catch (err: any) {
-      this.logger.warn(`timeSlots failed: ${err?.message}`);
-      return [];
+      try {
+        const response = await client.get(`/v1/fbs/invoice/dop/time-slot?${buildQs('customerOrderIds')}`, { timeout: 12_000 });
+        const payload = response.data?.payload;
+        return payload?.timeSlots || payload || [];
+      } catch (secondErr: any) {
+        this.logger.warn(`timeSlots failed: ${secondErr?.message || err?.message}`);
+        return [];
+      }
     }
   }
 

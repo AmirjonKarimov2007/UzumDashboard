@@ -190,6 +190,80 @@ export function useFbsInvoiceOrders(invoiceId: number | string | null) {
   });
 }
 
+export function useFbsInvoiceDropOffPoints(orderIds: Array<number | string>, enabled = true) {
+  const storeId = useActiveStoreId();
+  const idsKey = orderIds.map(String).sort().join(',');
+  return useQuery({
+    queryKey: ['fbs', 'invoiceDropOffPoints', storeId, idsKey],
+    queryFn: async () => {
+      const { data } = await apiClient.get(
+        `/marketplace/stores/${storeId}/fbs/invoices/dop/drop-off-points`,
+        { params: { orderIds: idsKey } },
+      );
+      return data as any[];
+    },
+    enabled: !!storeId && enabled && orderIds.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useFbsInvoiceTimeSlots(
+  dropOffPointUuid: string | null,
+  orderIds: Array<number | string>,
+  enabled = true,
+) {
+  const storeId = useActiveStoreId();
+  const idsKey = orderIds.map(String).sort().join(',');
+  return useQuery({
+    queryKey: ['fbs', 'invoiceTimeSlots', storeId, dropOffPointUuid, idsKey],
+    queryFn: async () => {
+      const { data } = await apiClient.get(
+        `/marketplace/stores/${storeId}/fbs/invoices/dop/time-slots`,
+        { params: { dopId: dropOffPointUuid, orderIds: idsKey } },
+      );
+      return data as any[];
+    },
+    enabled: !!storeId && enabled && !!dropOffPointUuid && orderIds.length > 0,
+    staleTime: 60 * 1000,
+  });
+}
+
+export function useCreateFbsInvoice() {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  const createIdempotencyKey = () =>
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return useMutation({
+    mutationFn: async (body: {
+      orderIds: Array<number | string>;
+      dropOffPointUuid: string;
+      timeSlotUuid: string;
+      sellerId?: number;
+    }) => {
+      const { data } = await apiClient.post(`/marketplace/stores/${storeId}/fbs/invoices`, {
+        ...body,
+        idempotencyKey: createIdempotencyKey(),
+      });
+      return data as { ok: boolean; payload?: any; error?: string; code?: string };
+    },
+    onSuccess: (data) => {
+      if (data.ok) {
+        toast.success("Ta'minlash yaratildi");
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'orders', storeId] });
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoices', storeId] });
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'orderCounts', storeId] });
+      } else {
+        toast.error(data.error || "Ta'minlash yaratilmadi");
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || "Ta'minlash yaratilmadi");
+    },
+  });
+}
+
 export function useOrders(params?: {
   page?: number; size?: number; search?: string;
   status?: string; dateFrom?: string; dateTo?: string;

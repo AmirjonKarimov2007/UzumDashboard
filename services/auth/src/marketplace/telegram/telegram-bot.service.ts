@@ -158,6 +158,21 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     this.bot.command('menu', async (ctx) =>
       this.requireAuth(ctx, () => this.showHome(ctx, false)),
     );
+    this.bot.command('today', async (ctx) =>
+      this.requireAuth(ctx, (tu) => this.showStats(ctx, tu.userId, 'today', false)),
+    );
+    this.bot.command('week', async (ctx) =>
+      this.requireAuth(ctx, (tu) => this.showStats(ctx, tu.userId, 'week', false)),
+    );
+    this.bot.command('month', async (ctx) =>
+      this.requireAuth(ctx, (tu) => this.showStats(ctx, tu.userId, 'month', false)),
+    );
+    this.bot.command('stores', async (ctx) =>
+      this.requireAuth(ctx, (tu) => this.showStores(ctx, tu.userId, false)),
+    );
+    this.bot.command('expenses', async (ctx) =>
+      this.requireAuth(ctx, (tu) => this.showExpenses(ctx, tu.userId, 0, false)),
+    );
     this.bot.command('logout', async (ctx) => this.handleLogout(ctx));
     this.bot.command('help', async (ctx) => this.sendHelp(ctx));
 
@@ -312,15 +327,15 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
           break;
         case 'stats':
           await this.ack(ctx, '⏳ Hisoblanmoqda…');
-          await this.showStats(ctx, tu.userId, rest[0] as StatsRange);
+          await this.showStats(ctx, tu.userId, rest[0] as StatsRange, true);
           break;
         case 'fin':
           await this.ack(ctx);
-          await this.showExpenses(ctx, tu.userId, Number(rest[1] || 0));
+          await this.showExpenses(ctx, tu.userId, Number(rest[1] || 0), true);
           break;
         case 'stores':
           await this.ack(ctx);
-          await this.showStores(ctx, tu.userId);
+          await this.showStores(ctx, tu.userId, true);
           break;
         case 'notify':
           await this.ack(
@@ -364,7 +379,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     await this.render(ctx, text, this.mainMenu(tu.notifyOrders), edit);
   }
 
-  private async showStats(ctx: Context, userId: string, range: StatsRange) {
+  private async showStats(ctx: Context, userId: string, range: StatsRange, edit = true) {
     const safeRange: StatsRange = ['today', 'week', 'month'].includes(range)
       ? range
       : 'today';
@@ -374,13 +389,13 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
       ctx,
       text,
       this.mainMenu(tu?.notifyOrders ?? true, safeRange),
-      true,
+      edit,
     );
   }
 
-  private async showStores(ctx: Context, userId: string) {
+  private async showStores(ctx: Context, userId: string, edit = true) {
     const text = await this.stats.formatStoresList(userId);
-    await this.render(ctx, text, this.backMenu(), true);
+    await this.render(ctx, text, this.backMenu(), edit);
   }
 
   private async toggleNotify(
@@ -466,7 +481,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
 
   // ─── Expenses view + entry ─────────────────────────────────────────────────
 
-  private async showExpenses(ctx: Context, userId: string, page: number) {
+  private async showExpenses(ctx: Context, userId: string, page: number, edit = true) {
     const { text, items, page: p, totalPages } =
       await this.stats.formatExpensesList(userId, page);
 
@@ -489,7 +504,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     }
     rows.push([Markup.button.callback('🏠 Bosh menyu', 'home')]);
 
-    await this.render(ctx, text, Markup.inlineKeyboard(rows), true);
+    await this.render(ctx, text, Markup.inlineKeyboard(rows), edit);
   }
 
   private async handleExpenseCallback(
