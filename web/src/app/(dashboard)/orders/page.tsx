@@ -7,13 +7,14 @@ import {
   ChevronLeft, ChevronRight, ChevronDown, X, Calendar,
   Copy, Check, ExternalLink, MapPin, Clock, Box, Hash, Tag,
   ShoppingBag, Truck, FileText, Phone, User, Printer, Download,
-  QrCode, CheckCircle2, ZoomIn, ClipboardList,
+  QrCode, CheckCircle2, ZoomIn, ClipboardList, AlertTriangle,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/shared/page-header";
 import { formatCurrency } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-import { useFbsOrders, useFbsOrderCounts, useFbsInvoices, useFbsInvoiceOrders, useConfirmFbsOrder, useCancelFbsOrder, useFbsReturnReasons, useDbsOrderAction, useFbsInvoiceDropOffPoints, useFbsInvoiceTimeSlots, useCreateFbsInvoice } from "@/hooks/use-orders";
+import { useFbsOrders, useFbsOrderCounts, useFbsInvoices, useFbsInvoiceSmartupCounts, useFbsInvoiceOrders, useConfirmFbsOrder, useCancelFbsOrder, useFbsReturnReasons, useDbsOrderAction, useFbsInvoiceDropOffPoints, useFbsInvoiceTimeSlots, useCreateFbsInvoice, useImportInvoiceOrdersToSmartup, useCheckOrderInSmartup, useCheckInvoiceImportsInSmartup } from "@/hooks/use-orders";
 import { useSyncStatus } from "@/hooks/use-sync";
 import { useAuthStore } from "@/stores/auth-store";
 import { useDashboardStore } from "@/stores/dashboard-store";
@@ -22,6 +23,7 @@ import { printQrLabels, printHtmlDocument, type QrLabelEntry } from "@/lib/qr-pr
 import { printInvoiceAct, printInvoiceActPdf } from "@/lib/invoice-act";
 import { apiClient } from "@/lib/api/client";
 import { toast } from "sonner";
+import { productImageUrl } from "@/lib/uzum-image";
 
 // ─── Picking sheet (Yig'ish varaqasi) ────────────────────────────────────
 // Aggregates all order items across a set of orders by SKU, summing quantities,
@@ -404,6 +406,7 @@ function usePrintLabel() {
 function usePrintBatchLabels() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  const [failure, setFailure] = useState<{ orderIds: (string | number)[]; failedOrderIds: (string | number)[] } | null>(null);
   const storeId = useAuthStore((s) => s.activeStoreId);
   const accessToken = useAuthStore((s) => s.accessToken);
 
@@ -411,6 +414,7 @@ function usePrintBatchLabels() {
     if (!storeId || !accessToken || orderIds.length === 0) return;
     setLoading(true);
     setProgress({ done: 0, total: orderIds.length });
+    setFailure(null);
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
       const res = await fetch(`${apiUrl}/marketplace/stores/${storeId}/fbs/labels/batch`, {
@@ -422,18 +426,30 @@ function usePrintBatchLabels() {
         body: JSON.stringify({ orderIds, size: "LARGE" }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: { results: Array<{ orderId: number; ok: boolean; document?: string }> } = await res.json();
+      const data: { failedOrderIds?: (string | number)[]; results: Array<{ orderId: string | number; ok: boolean; document?: string }> } = await res.json();
       const successful = data.results.filter((r) => r.ok && r.document);
       setProgress({ done: successful.length, total: orderIds.length });
 
       if (successful.length === 0) {
-        toast.error("Etiketkalar yuklab olinmadi");
+        const failedOrderIds = data.failedOrderIds || data.results.filter((r) => !r.ok).map((r) => r.orderId);
+        setFailure({ orderIds, failedOrderIds });
+        toast.error(`Etiketkalar yuklab olinmadi: ${failedOrderIds.length} ta buyurtma xato berdi`);
+        return;
+      }
+
+      // Never open a partial print job: a missing label is operationally worse
+      // than waiting for a retry, because it can ship an incomplete invoice.
+      const failedOrderIds = data.failedOrderIds || data.results.filter((r) => !r.ok).map((r) => r.orderId);
+      if (failedOrderIds.length > 0) {
+        setFailure({ orderIds, failedOrderIds });
+        toast.error(`${orderIds.length} ta etiketkaning ${failedOrderIds.length} tasi olinmadi. Hech biri chop etilmadi — qayta urinib hammasini birga chiqaring.`);
         return;
       }
 
       // Merge all PDFs into one using pdf-lib
       const { PDFDocument } = await import("pdf-lib");
       const merged = await PDFDocument.create();
+      const invalidPdfOrderIds: (string | number)[] = [];
       for (const r of successful) {
         try {
           const bytes = Uint8Array.from(atob(r.document!), (c) => c.charCodeAt(0));
@@ -441,20 +457,21 @@ function usePrintBatchLabels() {
           const pages = await merged.copyPages(src, src.getPageIndices());
           pages.forEach((p) => merged.addPage(p));
         } catch (e) {
-          console.warn(`Skipped order ${r.orderId} due to PDF parse error`);
+          invalidPdfOrderIds.push(r.orderId);
         }
+      }
+
+      if (invalidPdfOrderIds.length > 0) {
+        setFailure({ orderIds, failedOrderIds: invalidPdfOrderIds });
+        toast.error(`${invalidPdfOrderIds.length} ta etiketka PDF xato. Hech biri chop etilmadi — qayta urinib hammasini birga chiqaring.`);
+        return;
       }
 
       const mergedBytes = await merged.save();
       const blob = new Blob([mergedBytes as unknown as ArrayBuffer], { type: "application/pdf" });
       await printPdfBlob(blob);
 
-      const failed = orderIds.length - successful.length;
-      if (failed > 0) {
-        toast.warning(`${successful.length} etiketka chop etishga yuborildi, ${failed} tasi yuklab olinmadi`);
-      } else {
-        toast.success(`${successful.length} ta etiketka chop etishga yuborildi`);
-      }
+      toast.success(`${successful.length} ta etiketka chop etishga yuborildi`);
     } catch (err: any) {
       toast.error(`Etiketkalarni yuklab bo'lmadi: ${err?.message || "xato"}`);
     } finally {
@@ -462,7 +479,7 @@ function usePrintBatchLabels() {
     }
   };
 
-  return { printBatch, isLoading: loading, progress };
+  return { printBatch, retry: () => failure && printBatch(failure.orderIds), failure, isLoading: loading, progress };
 }
 
 // Hook for fetching barcodes and generating QR code printable PDF
@@ -856,6 +873,7 @@ function CreateInvoiceModal({
   onCreated: () => void;
 }) {
   const orderIds = useMemo(() => orders.map((o) => o.id).filter(Boolean), [orders]);
+  const orderIdsKey = orderIds.join(",");
   const [dropOffUuid, setDropOffUuid] = useState("");
   const [timeSlotUuid, setTimeSlotUuid] = useState("");
   const [pointSearch, setPointSearch] = useState("");
@@ -867,7 +885,7 @@ function CreateInvoiceModal({
   useEffect(() => {
     setDropOffUuid("");
     setTimeSlotUuid("");
-  }, [open, orderIds.join(",")]);
+  }, [open, orderIdsKey]);
 
   useEffect(() => {
     const first = dropOffQuery.data?.[0];
@@ -1124,7 +1142,7 @@ function OrderRow({
 }) {
   const items = order.orderItems || [];
   const firstItem = items[0] || {};
-  const firstPhoto = firstItem.photo?.photo?.["240"]?.high || firstItem.photo?.photo?.["240"]?.low;
+  const firstPhoto = productImageUrl(firstItem, "thumb");
   const st = statusBadgeConfig[order.status] || { label: order.status, color: "#71717a", bg: "rgba(113,113,122,.15)" };
   const totalItems = items.reduce((s: number, it: any) => s + (it.amount || 0), 0);
 
@@ -1227,7 +1245,21 @@ function OrderRow({
 
 // ─── Invoice (Ta'minlash) row ───────────────────────────────────────────
 
-function InvoiceRow({ invoice, onClick, index }: { invoice: any; onClick: () => void; index: number }) {
+function InvoiceRow({
+  invoice,
+  onClick,
+  onImport,
+  isImporting,
+  importDisabled,
+  index,
+}: {
+  invoice: any;
+  onClick: () => void;
+  onImport: () => void;
+  isImporting: boolean;
+  importDisabled: boolean;
+  index: number;
+}) {
   const status = invoice.status?.value || "UNKNOWN";
   const statusText = invoice.status?.text || status;
   const statusColors: Record<string, { color: string; bg: string }> = {
@@ -1239,6 +1271,24 @@ function InvoiceRow({ invoice, onClick, index }: { invoice: any; onClick: () => 
   const sc = statusColors[status] || { color: "#a1a1aa", bg: "rgba(113,113,122,.15)" };
 
   const slot = fmtSlot(invoice.timeSlot?.timeFrom, invoice.timeSlot?.timeTo);
+  const smartup = invoice.smartupImport;
+  const smartupDealId = smartup?.smartupDealId ? String(smartup.smartupDealId) : "";
+  const isInSmartup = smartup?.status === "SUCCESS" && !!smartupDealId;
+  const smartupView = isInSmartup
+    ? { label: "Smartupda bor", color: "#34d399", bg: "rgba(16,185,129,.12)", border: "rgba(16,185,129,.3)" }
+    : smartup?.status === "REVIEW_REQUIRED"
+      ? { label: "Smartupda tekshiring", color: "#fbbf24", bg: "rgba(245,158,11,.12)", border: "rgba(245,158,11,.3)" }
+      : smartup?.status === "PROCESSING"
+        ? { label: "Yuborilmoqda", color: "#22d3ee", bg: "rgba(6,182,212,.12)", border: "rgba(6,182,212,.3)" }
+        : smartup?.status === "NOT_FOUND"
+          ? { label: "Smartupdan o‘chirilgan", color: "#fb923c", bg: "rgba(249,115,22,.12)", border: "rgba(249,115,22,.3)" }
+        : smartup?.status === "ERROR"
+          ? { label: "Smartup xatosi", color: "#f87171", bg: "rgba(239,68,68,.12)", border: "rgba(239,68,68,.3)" }
+          : { label: "Ko‘chirilmagan", color: "#a1a1aa", bg: "rgba(113,113,122,.1)", border: "rgba(113,113,122,.25)" };
+  // Keep the action available for a local SUCCESS as well. The backend performs
+  // a live Smartup check first, so a remotely deleted document can be restored
+  // from this same button instead of being trapped behind stale local state.
+  const canImport = !["PROCESSING", "REVIEW_REQUIRED"].includes(smartup?.status);
 
   return (
     <div
@@ -1256,15 +1306,45 @@ function InvoiceRow({ invoice, onClick, index }: { invoice: any; onClick: () => 
           {statusText}
         </span>
       </div>
-      <div className="col-span-6 md:col-span-3">
+      <div className="col-span-6 md:col-span-2">
         <p className="text-[11px] text-[#71717a] uppercase tracking-wider font-semibold">Ta'minlash vaqti</p>
         <p className="text-sm text-white mt-1">{slot}</p>
       </div>
-      <div className="col-span-12 md:col-span-3">
+      <div className="col-span-12 md:col-span-2">
         <p className="text-[11px] text-[#71717a] uppercase tracking-wider font-semibold">Qabul qilish joyi</p>
         <p className="text-sm text-[#a1a1aa] mt-1 line-clamp-2" title={invoice.dropOffPoint?.address || invoice.stock?.title}>
           {invoice.dropOffPoint?.address || invoice.stock?.title || "—"}
         </p>
+      </div>
+      <div className="col-span-12 sm:col-span-6 md:col-span-2">
+        <p className="text-[11px] text-[#71717a] uppercase tracking-wider font-semibold">Smartup</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <span
+            className="inline-flex max-w-full items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-semibold"
+            style={{ color: smartupView.color, background: smartupView.bg, borderColor: smartupView.border }}
+            title={smartup?.errorMessage || (smartupDealId ? `Smartup deal ID: ${smartupDealId}` : smartupView.label)}
+          >
+            {isInSmartup ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 shrink-0" />}
+            <span className="truncate">{smartupView.label}</span>
+          </span>
+          {canImport && (
+            <button
+              type="button"
+              onClick={(event) => { event.stopPropagation(); onImport(); }}
+              disabled={importDisabled}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/35 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 disabled:cursor-wait disabled:opacity-60"
+              aria-label={`Ta’minlash ${invoice.number || invoice.id} ni Smartupga ko‘chirish`}
+            >
+              {isImporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+              {isImporting ? "Tekshirilmoqda" : isInSmartup ? "Tekshirish" : "Ko‘chirish"}
+            </button>
+          )}
+        </div>
+        {smartupDealId && (
+          <p className="mt-1 truncate font-mono text-[10px] text-[#71717a]" title={smartupDealId}>
+            Deal ID: <span className="text-[#d1fae5]">{smartupDealId}</span>
+          </p>
+        )}
       </div>
       <div className="col-span-6 md:col-span-1 text-right">
         <p className="text-[11px] text-[#71717a] uppercase tracking-wider font-semibold">Buyurtmalar</p>
@@ -1281,16 +1361,30 @@ function InvoiceRow({ invoice, onClick, index }: { invoice: any; onClick: () => 
 }
 
 function InvoiceDetailModal({ invoice, onClose }: { invoice: any | null; onClose: () => void }) {
-  const { data: ordersData, isLoading } = useFbsInvoiceOrders(invoice?.id ?? null);
-  const { printBatch, isLoading: batchPrinting, progress } = usePrintBatchLabels();
+  const { data: ordersData, isLoading, isError, refetch } = useFbsInvoiceOrders(invoice?.id ?? null);
+  const { printBatch, retry: retryLabels, failure: labelFailure, isLoading: batchPrinting, progress } = usePrintBatchLabels();
   const { run: printQrFast, isLoading: qrPrinting, progress: qrProgress } = usePrintQrFast();
   const [zoomImg, setZoomImg] = useState<string | null>(null);
   const { usdRate, displayCurrency } = useDashboardStore();
   const sellerName = useSellerName();
   const storeId = useAuthStore((s) => s.activeStoreId);
+  const importSmartup = useImportInvoiceOrdersToSmartup();
+  const checkSmartup = useCheckOrderInSmartup();
   if (!invoice) return null;
 
   const orders = ordersData?.orders || [];
+  const acceptedOrdersCount = Number(ordersData?.acceptanceSummary?.accepted ?? invoice.numberAcceptedOrders ?? 0);
+  const importedCount = orders.filter((o: any) =>
+    o.acceptedInThisInvoice === true
+    && o.smartupImport?.status === "SUCCESS"
+    && o.smartupImport?.smartupDealId,
+  ).length;
+  const locallyImported = acceptedOrdersCount > 0 && importedCount >= acceptedOrdersCount;
+  const needsReview = orders.some((o: any) => ["PROCESSING", "REVIEW_REQUIRED"].includes(o.smartupImport?.status));
+  const smartupDealIds = [...new Set(orders
+    .map((o: any) => o.smartupImport?.smartupDealId)
+    .filter(Boolean)
+    .map(String))];
   const status = invoice.status?.value || "UNKNOWN";
   const statusText = invoice.status?.text || status;
   const statusColors: Record<string, { color: string; bg: string }> = {
@@ -1379,6 +1473,32 @@ function InvoiceDetailModal({ invoice, onClose }: { invoice: any | null; onClose
               </div>
             </div>
 
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-white">Topshirilgan buyurtmalar → 1 ta Smartup orderi</p>
+                <p className="mt-1 text-xs leading-relaxed text-[#a1a1aa]">
+                  Smartupga faqat Uzum qabul qilgan {acceptedOrdersCount}/{Number(invoice.numberOrders ?? orders.length)} ta buyurtma yuboriladi. Qabul qilinmagan va bekor qilingan orderlar kiritilmaydi.
+                </p>
+                {acceptedOrdersCount === 0 && <p role="alert" className="mt-1 text-xs text-amber-300">Hozircha topshirilgan buyurtma yo'q. Tugma bosilsa Smartupga hech narsa yuborilmaydi va xatolik ko'rsatiladi.</p>}
+                {importedCount > 0 && <p className="mt-1 text-xs text-emerald-300">{importedCount}/{acceptedOrdersCount} ta topshirilgan buyurtma mahalliy bazada Smartupga yuborilgan deb belgilangan. Tugma bosilganda Smartupdagi hujjat jonli tekshiriladi.</p>}
+                {smartupDealIds.length > 0 && (
+                  <p className="mt-1 text-xs text-[#a7f3d0]">
+                    Smartup deal ID: <span className="font-mono font-semibold">{smartupDealIds.join(", ")}</span>
+                  </p>
+                )}
+                {needsReview && <p role="status" className="mt-1 text-xs text-amber-300">Oldingi yuborish holati tekshirilishi kerak. Takroriy order yaratmaslik uchun Smartupdagi hujjatni tekshiring.</p>}
+                {importSmartup.isError && <p role="alert" className="mt-1 text-xs text-red-300">{(importSmartup.error as any)?.response?.data?.message || "Smartupga yuborib bo'lmadi."}</p>}
+              </div>
+              <button
+                onClick={() => importSmartup.mutate(invoice.id)}
+                disabled={isLoading || isError || orders.length === 0 || acceptedOrdersCount === 0 || importSmartup.isPending || needsReview}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/15 px-4 py-2.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {importSmartup.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : locallyImported ? <RefreshCw className="w-4 h-4" /> : <ExternalLink className="w-4 h-4" />}
+                {importSmartup.isPending ? "Smartup tekshirilmoqda..." : locallyImported ? "Tekshirish / qayta yuborish" : "Smartupga ko'chirish"}
+              </button>
+            </div>
+
             <div>
               <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
                 <h3 className="text-sm font-semibold text-white">Buyurtmalar va mahsulotlar</h3>
@@ -1421,6 +1541,17 @@ function InvoiceDetailModal({ invoice, onClose }: { invoice: any | null; onClose
                           </>
                         )}
                       </button>
+                      {labelFailure && (
+                        <button
+                          onClick={retryLabels}
+                          disabled={batchPrinting}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-400/50 bg-red-500/15 text-red-200 hover:bg-red-500/25 text-xs font-semibold transition-all disabled:opacity-60"
+                          title={`Xato bergan buyurtmalar: ${labelFailure.failedOrderIds.join(', ')}`}
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Etiketkani qayta urinish ({labelFailure.failedOrderIds.length})
+                        </button>
+                      )}
                       <button
                         onClick={() => printQrFast(orders)}
                         disabled={qrPrinting}
@@ -1447,28 +1578,86 @@ function InvoiceDetailModal({ invoice, onClose }: { invoice: any | null; onClose
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="w-6 h-6 text-[#8b5cf6] animate-spin" />
                 </div>
+              ) : isError ? (
+                <div role="alert" className="py-8 text-center text-sm text-red-300">
+                  Ta'minlash buyurtmalari yuklanmadi.
+                  <button onClick={() => refetch()} className="ml-2 underline">Qayta yuklash</button>
+                </div>
               ) : orders.length === 0 ? (
                 <div className="py-12 text-center text-xs text-[#52525b]">Mahsulotlar topilmadi</div>
               ) : (
                 <div className="space-y-3">
                   {orders.map((order: any) => (
-                    <div key={order.orderId} className="rounded-xl bg-[#0f0f16] border border-[#1c1c24] overflow-hidden">
+                    <div
+                      key={order.orderId}
+                      className={cn(
+                        "rounded-xl bg-[#0f0f16] border overflow-hidden",
+                        order.acceptedInThisInvoice
+                          ? "border-emerald-500/25"
+                          : "border-orange-500/35 bg-orange-500/[0.03]",
+                      )}
+                    >
                       <div className="px-4 py-2.5 border-b border-[#18181b] bg-[#13131a] flex items-center justify-between flex-wrap gap-2">
                         <div className="flex items-center gap-2">
                           <Hash className="w-3.5 h-3.5 text-[#52525b]" />
                           <CopyableId value={order.orderId} label="Buyurtma" />
                           <span className="text-[11px] text-[#52525b]">·</span>
                           <span className="text-[11px] text-[#a1a1aa]">{(order.items || []).length} ta mahsulot</span>
+                          {order.acceptedInThisInvoice ? (
+                            <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-300">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Shu ta’minlashda topshirilgan
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-md border border-orange-500/35 bg-orange-500/10 px-2 py-1 text-[10px] font-semibold text-orange-300"
+                              title="Bu buyurtma ta’minlashga qo‘shilgan, ammo Uzum aynan shu ta’minlash tarkibida uni qabul qilmagan"
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                              Zakaz tushgan, lekin topshirilmagan
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
+                          {order.smartupImport?.status === "SUCCESS" && order.smartupImport?.smartupDealId ? (
+                            <span
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#10b981]/15 border border-[#10b981]/35 text-[#34d399] text-[11px] font-semibold"
+                              title={order.smartupImport.smartupDealId ? `Smartup deal: ${order.smartupImport.smartupDealId}` : "Smartupga tushgan"}
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Smartup
+                            </span>
+                          ) : order.smartupImport?.status ? (
+                            <span className={cn("text-[11px]", order.smartupImport.status === "NOT_FOUND" ? "text-orange-300" : "text-amber-300")} title={order.smartupImport?.errorMessage}>
+                              {order.smartupImport.status === "PROCESSING"
+                                ? "Yuborilmoqda"
+                                : order.smartupImport.status === "REVIEW_REQUIRED"
+                                  ? "Smartupda tekshiring"
+                                  : order.smartupImport.status === "NOT_FOUND"
+                                    ? "Smartupdan o‘chirilgan"
+                                    : "Smartup xato"}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => checkSmartup.mutate(order.orderId)}
+                            disabled={checkSmartup.isPending}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#3f3f46] bg-[#18181b] px-2.5 py-1.5 text-[11px] font-semibold text-[#d4d4d8] transition-colors hover:border-[#8b5cf6]/60 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 disabled:cursor-wait disabled:opacity-60"
+                            title="Order ID orqali Smartupdagi real holatini tekshirish"
+                          >
+                            {checkSmartup.isPending && String(checkSmartup.variables ?? '') === String(order.orderId)
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <RefreshCw className="h-3.5 w-3.5" />}
+                            Tekshirish
+                          </button>
                           <p className="text-xs font-bold text-white tabular-nums">{fmtSom(order.fullPrice || 0)}</p>
                           <PrintLabelButton orderId={order.orderId} compact />
                         </div>
                       </div>
                       <div className="divide-y divide-[#18181b]">
                         {(order.items || []).map((item: any) => {
-                          const photoHi = item.photo?.photo?.["480"]?.high || item.photo?.photo?.["240"]?.high;
-                          const photo = photoHi || item.photo?.photo?.["240"]?.low;
+                          const photoHi = productImageUrl(item, "high");
+                          const photo = productImageUrl(item, "medium") || photoHi;
                           return (
                             <div key={item.orderId + "-" + item.barcode} className="px-4 py-3 flex items-center gap-3.5">
                               <button
@@ -1571,10 +1760,13 @@ function InvoiceDetailModal({ invoice, onClose }: { invoice: any | null; onClose
 
 function OrderDetailModal({ order, onClose }: { order: any | null; onClose: () => void }) {
   const { printAct, loading: actLoading } = usePrintInvoiceAct();
+  const checkSmartup = useCheckOrderInSmartup();
   if (!order) return null;
   const items = order.orderItems || [];
   const st = statusBadgeConfig[order.status] || { label: order.status, color: "#71717a", bg: "rgba(113,113,122,.15)" };
   const totalItems = items.reduce((s: number, it: any) => s + (it.amount || 0), 0);
+  const smartupOrderId = String(order.orderId ?? order.id ?? '');
+  const checkResult = checkSmartup.data?.uzumOrderId === smartupOrderId ? checkSmartup.data : null;
 
   return (
     <AnimatePresence>
@@ -1619,6 +1811,47 @@ function OrderDetailModal({ order, onClose }: { order: any | null; onClose: () =
               )}
               <CopyableId value={order.id} label="ID" />
               {order.publicId && <CopyableId value={order.publicId} label="Public" />}
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-xl border border-[#27272a] bg-[#0f0f16] p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  {checkResult?.state === "FOUND" ? (
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                  ) : checkResult?.state === "NOT_FOUND" ? (
+                    <AlertCircle className="h-4 w-4 shrink-0 text-orange-400" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 shrink-0 text-[#8b5cf6]" />
+                  )}
+                  <p className="text-sm font-semibold text-white">Smartup holatini tekshirish</p>
+                </div>
+                <p className={cn(
+                  "mt-1 text-xs leading-relaxed",
+                  checkResult?.state === "FOUND"
+                    ? "text-emerald-300"
+                    : checkResult?.state === "NOT_FOUND"
+                      ? "text-orange-300"
+                      : "text-[#71717a]",
+                )}>
+                  {checkResult
+                    ? `${checkResult.message}${checkResult.smartupDealId ? ` · Deal ID: ${checkResult.smartupDealId}` : ''}`
+                    : `Order ID ${smartupOrderId} bo‘yicha Smartupning o‘zidan tekshiriladi.`}
+                </p>
+                {checkSmartup.isError && (
+                  <p role="alert" className="mt-1 text-xs text-red-300">
+                    {(checkSmartup.error as any)?.response?.data?.message || "Smartup holatini tekshirib bo‘lmadi"}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => checkSmartup.mutate(smartupOrderId)}
+                disabled={!smartupOrderId || checkSmartup.isPending}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border border-[#8b5cf6]/40 bg-[#8b5cf6]/15 px-4 py-2.5 text-xs font-semibold text-[#c4b5fd] transition-colors hover:bg-[#8b5cf6]/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 disabled:cursor-wait disabled:opacity-60"
+              >
+                {checkSmartup.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {checkSmartup.isPending ? "Tekshirilmoqda..." : "Tekshirish"}
+              </button>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
@@ -1679,7 +1912,7 @@ function OrderDetailModal({ order, onClose }: { order: any | null; onClose: () =
               </div>
               <div className="space-y-2">
                 {items.map((item: any) => {
-                  const photo = item.photo?.photo?.["240"]?.high || item.photo?.photo?.["240"]?.low;
+                  const photo = productImageUrl(item, "thumb");
                   return (
                     <div key={item.id} className="rounded-xl bg-[#0f0f16] border border-[#1c1c24] p-3 flex items-center gap-3">
                       <div className="w-12 h-12 rounded-lg bg-[#18181b] overflow-hidden flex-shrink-0 flex items-center justify-center">
@@ -1772,17 +2005,39 @@ function OrderDetailModal({ order, onClose }: { order: any | null; onClose: () =
 }
 
 type Section = "orders" | "invoices";
+type SmartupInvoiceFilter = "ALL" | "IMPORTED" | "NOT_IMPORTED" | "MISSING";
+type PaginationItem = number | "ellipsis-left" | "ellipsis-right";
+
+function invoicePaginationItems(currentPage: number, totalPages: number): PaginationItem[] {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index);
+  if (currentPage <= 3) return [0, 1, 2, 3, 4, "ellipsis-right", totalPages - 1];
+  if (currentPage >= totalPages - 4) {
+    return [0, "ellipsis-left", totalPages - 5, totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1];
+  }
+  return [0, "ellipsis-left", currentPage - 1, currentPage, currentPage + 1, "ellipsis-right", totalPages - 1];
+}
 
 export default function OrdersPage() {
-  const [section, setSection] = useState<Section>("orders");
+  const storeId = useAuthStore((state) => state.activeStoreId);
+  const pathname = usePathname();
+  const router = useRouter();
+  const section: Section = pathname === "/supplies" ? "invoices" : "orders";
+  const setSection = (value: Section) => router.push(value === "invoices" ? "/supplies" : "/orders");
   const [activeTabId, setActiveTabId] = useState<string>("CREATED");
   const [page, setPage] = useState(0);
+  const [invoicePage, setInvoicePage] = useState(0);
+  const [smartupInvoiceFilter, setSmartupInvoiceFilter] = useState<SmartupInvoiceFilter>("ALL");
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string | number>>(new Set());
   const [createInvoiceOpen, setCreateInvoiceOpen] = useState(false);
   const [scheme, setScheme] = useState<"ALL" | "FBS" | "DBS">("ALL");
   const pageSize = 20;
+  const invoicePageSize = 20;
+  useEffect(() => {
+    setSelectedOrder(null); setSelectedInvoice(null); setSelectedOrderIds(new Set());
+    setCreateInvoiceOpen(false); setPage(0); setInvoicePage(0); setSmartupInvoiceFilter("ALL");
+  }, [storeId]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
 
@@ -1792,44 +2047,62 @@ export default function OrdersPage() {
   useEffect(() => {
     const stored = localStorage.getItem("orders-tab");
     if (stored && tabs.some(t => t.id === stored)) setActiveTabId(stored);
-    const storedSection = localStorage.getItem("orders-section") as Section | null;
-    if (storedSection === "orders" || storedSection === "invoices") setSection(storedSection);
   }, []);
   useEffect(() => { localStorage.setItem("orders-tab", activeTabId); }, [activeTabId]);
   useEffect(() => { localStorage.setItem("orders-section", section); }, [section]);
   useEffect(() => { setSelectedOrderIds(new Set()); }, [activeTabId, page, scheme, section]);
 
   // Invoices section
-  const { data: invoicesData, isLoading: invoicesLoading, isFetching: invoicesFetching, refetch: refetchInvoices } = useFbsInvoices({
+  const { data: invoicesData, isLoading: invoicesLoading, isError: invoicesError, isFetching: invoicesFetching, refetch: refetchInvoices } = useFbsInvoices({
     statuses: "CREATED,ACCEPTANCE_IN_PROGRESS,ACCEPTED,CANCELLED",
-    page: 0,
-    size: 20, // Uzum max page size
-  });
-  const invoices = invoicesData?.invoices || [];
+    page: invoicePage,
+    size: invoicePageSize, // Uzum max page size
+    smartupFilter: smartupInvoiceFilter,
+  }, section === "invoices");
+  const {
+    data: invoiceSmartupCounts,
+    isLoading: invoiceSmartupCountsLoading,
+    isError: invoiceSmartupCountsError,
+    refetch: refetchInvoiceSmartupCounts,
+  } = useFbsInvoiceSmartupCounts({
+    statuses: "CREATED,ACCEPTANCE_IN_PROGRESS,ACCEPTED,CANCELLED",
+  }, section === "invoices");
+  const rowImportSmartup = useImportInvoiceOrdersToSmartup();
+  const invoiceSmartupCheck = useCheckInvoiceImportsInSmartup();
+  const invoices = useMemo(() => invoicesData?.invoices || [], [invoicesData?.invoices]);
+  const invoiceTotal = smartupInvoiceFilter === "ALL" ? invoiceSmartupCounts?.all : invoicesData?.total;
+  const invoiceTotalPages = invoiceTotal != null
+    ? Math.max(1, Math.ceil(invoiceTotal / invoicePageSize))
+    : Math.max(1, invoicePage + 1 + (invoicesData?.hasNext ? 1 : 0));
+  const invoicePagination = useMemo(
+    () => invoicePaginationItems(invoicePage, invoiceTotalPages),
+    [invoicePage, invoiceTotalPages],
+  );
+  const visibleInvoices = invoices;
 
-  const { data: counts, isLoading: countsLoading, refetch: refetchCounts } = useFbsOrderCounts();
-  const { data: ordersData, isLoading, isFetching, refetch } = useFbsOrders({
+  const { data: counts, isLoading: countsLoading, refetch: refetchCounts } = useFbsOrderCounts(undefined, section === "orders");
+  const { data: ordersData, isLoading, isError: ordersError, isFetching, refetch } = useFbsOrders({
     status: activeTab.primary,
     page,
     size: pageSize,
     ...(scheme !== "ALL" ? { scheme: scheme as 'FBS' | 'DBS' } : {}),
-  });
+  }, section === "orders");
 
   // Sum across all statuses in the active tab (e.g. DELIVERING + ACCEPTED_AT_DP)
   const tabCount = (tab: TabConfig) =>
     tab.statuses.reduce((s, st) => s + (counts?.[st] ?? 0), 0);
 
-  const rawOrders = ordersData?.orders || [];
   // On the RETURNED tab, sort by actual return date desc (newest first).
   // Uzum returns RETURNED orders in arbitrary order; the user expects chronological.
   const orders = useMemo(() => {
+    const rawOrders = ordersData?.orders || [];
     if (activeTabId !== "RETURNED") return rawOrders;
     return [...rawOrders].sort((a: any, b: any) => {
       const da = Number(a.returnDate ?? a.completedDate ?? a.deliveryDate ?? a.dateCreated ?? 0);
       const db = Number(b.returnDate ?? b.completedDate ?? b.deliveryDate ?? b.dateCreated ?? 0);
       return db - da;
     });
-  }, [rawOrders, activeTabId]);
+  }, [ordersData?.orders, activeTabId]);
   const selectedOrders = useMemo(
     () => orders.filter((order: any) => selectedOrderIds.has(order.id)),
     [orders, selectedOrderIds],
@@ -1845,8 +2118,16 @@ export default function OrdersPage() {
 
   const handleRefresh = () => {
     if (section === "orders") { refetch(); refetchCounts(); }
-    else { refetchInvoices(); }
+    else { refetchInvoices(); refetchInvoiceSmartupCounts(); }
   };
+
+  useEffect(() => {
+    if (section !== "invoices") return;
+    if (invoiceTotal == null) return;
+    if (invoicePage >= invoiceTotalPages) {
+      setInvoicePage(Math.max(0, invoiceTotalPages - 1));
+    }
+  }, [section, invoicePage, invoiceTotal, invoiceTotalPages]);
 
   // Print-label button shows up on rows for these tabs
   const showPrintLabelOnTabs = new Set(["PACKING", "PREPARING"]); // Yig'ishdagilar + Ta'minlashda
@@ -1869,7 +2150,7 @@ export default function OrdersPage() {
   if (!isConnected) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Buyurtmalar" subtitle="FBS / DBS buyurtmalari" />
+        <PageHeader title={section === "invoices" ? "Ta’minlashlar" : "Buyurtmalar"} subtitle="FBS / DBS boshqaruvi" />
         <div className="rounded-2xl bg-[#0f0f16] border border-[#1c1c24]">
           <NotConnectedState />
         </div>
@@ -1880,10 +2161,10 @@ export default function OrdersPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="FBS / DBS"
+        title={section === "invoices" ? "Ta’minlashlar" : "Buyurtmalar"}
         subtitle={section === "orders"
           ? `Buyurtmalar · Jami ${totalAcrossTabs} ta`
-          : `Ta'minlashlar · ${invoices.length} ta`}
+          : `Ta'minlashlar · ${visibleInvoices.length}/${invoices.length} ta ko‘rsatilmoqda`}
         action={
           <div className="flex items-center gap-2">
             {section === "orders" && (
@@ -1987,7 +2268,8 @@ export default function OrdersPage() {
             </div>
           )}
 
-          {!isLoading && orders.length === 0 && (
+          {ordersError && <div role="alert" className="rounded-xl border border-[#f59e0b]/30 p-4 text-sm text-[#fbbf24]">Buyurtmalarni olib bo‘lmadi. <button onClick={() => refetch()} className="underline">Qayta urinish</button></div>}
+          {!ordersError && !isLoading && orders.length === 0 && (
             <div className="rounded-2xl bg-[#0f0f16] border border-[#1c1c24] py-16 text-center">
               <Box className="w-12 h-12 text-[#3f3f46] mx-auto mb-3" />
               <p className="text-sm font-semibold text-white">Buyurtmalar topilmadi</p>
@@ -2150,40 +2432,228 @@ export default function OrdersPage() {
 
       {section === "invoices" && (
         <>
+          {!invoicesLoading && !invoicesError && (
+            <div className="rounded-xl border border-[#1c1c24] bg-[#0f0f16] p-3.5">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-white">Smartup holati</p>
+                  <p className="mt-0.5 text-[11px] leading-5 text-[#71717a]">
+                    Tekshiruv barcha ko‘chirilgan ta’minlashlarni Smartupdagi real holati bilan solishtiradi
+                  </p>
+                  {invoiceSmartupCountsError && (
+                    <p role="alert" className="mt-1 text-[11px] text-amber-300">Umumiy hisobni olib bo‘lmadi. Yangilashni bosing.</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => invoiceSmartupCheck.mutate()}
+                  disabled={invoiceSmartupCheck.isPending || invoiceSmartupCountsLoading}
+                  className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#8b5cf6]/45 bg-[#8b5cf6]/15 px-3.5 text-xs font-semibold text-[#ddd6fe] transition-colors hover:border-[#8b5cf6]/70 hover:bg-[#8b5cf6]/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 disabled:cursor-wait disabled:opacity-55"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", invoiceSmartupCheck.isPending && "animate-spin")} />
+                  {invoiceSmartupCheck.isPending ? "Smartup tekshirilmoqda…" : "Smartupni tekshirish"}
+                </button>
+              </div>
+
+              {invoiceSmartupCheck.data && (
+                <div
+                  role="status"
+                  className={cn(
+                    "mt-3 rounded-lg border px-3 py-2.5 text-xs",
+                    invoiceSmartupCheck.data.missingDocuments > 0
+                      ? "border-orange-500/30 bg-orange-500/10 text-orange-200"
+                      : invoiceSmartupCheck.data.failedDocuments > 0
+                        ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                        : "border-emerald-500/25 bg-emerald-500/10 text-emerald-200",
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    {invoiceSmartupCheck.data.missingDocuments > 0
+                      ? <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
+                    <div className="min-w-0">
+                      <p className="font-semibold">
+                        {invoiceSmartupCheck.data.missingDocuments > 0
+                          ? `Smartupdan o‘chirilgan ${invoiceSmartupCheck.data.affectedInvoices} ta ta’minlash topildi`
+                          : `${invoiceSmartupCheck.data.checkedDocuments} ta Smartup hujjati tekshirildi — o‘chirilgani topilmadi`}
+                      </p>
+                      {invoiceSmartupCheck.data.failedDocuments > 0 && (
+                        <p className="mt-1 opacity-80">{invoiceSmartupCheck.data.failedDocuments} ta hujjatni tekshirishda Smartup javob bermadi.</p>
+                      )}
+                      {invoiceSmartupCheck.data.deletedInvoices.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {invoiceSmartupCheck.data.deletedInvoices.map((item) => (
+                            <button
+                              key={`${item.invoiceId}:${item.smartupExternalId}`}
+                              type="button"
+                              onClick={() => { setSmartupInvoiceFilter("MISSING"); setInvoicePage(0); }}
+                              className="rounded-md border border-orange-400/25 bg-black/15 px-2 py-1 font-mono text-[10px] text-orange-100 hover:border-orange-300/50"
+                              title={item.smartupDealId ? `Smartup Deal ID: ${item.smartupDealId}` : undefined}
+                            >
+                              Ta’minlash #{item.invoiceId}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {invoiceSmartupCheck.isError && (
+                <p role="alert" className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-xs text-red-200">
+                  {(invoiceSmartupCheck.error as any)?.response?.data?.message || "Ta’minlashlarni Smartupda tekshirib bo‘lmadi"}
+                </p>
+              )}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#1c1c24] pt-3" role="group" aria-label="Smartup holati bo‘yicha filtr">
+                {([
+                  { id: "ALL", label: "Hammasi", count: invoiceSmartupCounts?.all },
+                  { id: "IMPORTED", label: "Smartupda bor", count: invoiceSmartupCounts?.imported },
+                  { id: "NOT_IMPORTED", label: "Ko‘chirilmagan", count: invoiceSmartupCounts?.notImported },
+                  { id: "MISSING", label: "Smartupdan o‘chirilgan", count: invoiceSmartupCounts?.missing },
+                ] as const).map((filter) => (
+                  <button
+                    key={filter.id}
+                    type="button"
+                    onClick={() => { setSmartupInvoiceFilter(filter.id); setInvoicePage(0); }}
+                    aria-pressed={smartupInvoiceFilter === filter.id}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60",
+                      smartupInvoiceFilter === filter.id
+                        ? filter.id === "IMPORTED"
+                          ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                          : filter.id === "MISSING"
+                            ? "border-orange-500/40 bg-orange-500/15 text-orange-200"
+                            : "border-[#8b5cf6]/50 bg-[#8b5cf6]/15 text-white"
+                        : "border-[#27272a] bg-[#18181b] text-[#a1a1aa] hover:border-[#3f3f46] hover:text-white",
+                    )}
+                  >
+                    {filter.id === "IMPORTED" && <CheckCircle2 className="h-3.5 w-3.5" />}
+                    {(filter.id === "NOT_IMPORTED" || filter.id === "MISSING") && <AlertCircle className="h-3.5 w-3.5" />}
+                    {filter.label}
+                    <span className="min-w-5 rounded-full bg-black/20 px-1.5 py-0.5 text-center font-mono text-[10px]">
+                      {invoiceSmartupCountsLoading ? "…" : filter.count ?? "—"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {invoicesLoading && (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="w-6 h-6 text-[#8b5cf6] animate-spin" />
             </div>
           )}
-          {!invoicesLoading && invoices.length === 0 && (
+          {invoicesError && <div role="alert" className="rounded-xl border border-[#f59e0b]/30 p-4 text-sm text-[#fbbf24]">Ta’minlashlarni olib bo‘lmadi. <button onClick={() => refetchInvoices()} className="underline">Qayta urinish</button></div>}
+          {!invoicesError && !invoicesLoading && invoices.length === 0 && smartupInvoiceFilter === "ALL" && (
             <div className="rounded-2xl bg-[#0f0f16] border border-[#1c1c24] py-16 text-center">
               <FileText className="w-12 h-12 text-[#3f3f46] mx-auto mb-3" />
               <p className="text-sm font-semibold text-white">Ta'minlashlar topilmadi</p>
               <p className="text-xs text-[#52525b] mt-1">Hozircha yaratilgan yoki qabul qilingan ta'minlash yo'q</p>
             </div>
           )}
-          {!invoicesLoading && invoices.length > 0 && (
+          {!invoicesError && !invoicesLoading && visibleInvoices.length === 0 && smartupInvoiceFilter !== "ALL" && (
+            <div className="rounded-2xl border border-dashed border-[#27272a] bg-[#0f0f16] py-12 text-center">
+              <FileText className="mx-auto mb-3 h-9 w-9 text-[#3f3f46]" />
+              <p className="text-sm font-semibold text-white">Bu filtrda ta’minlash topilmadi</p>
+              <button type="button" onClick={() => { setSmartupInvoiceFilter("ALL"); setInvoicePage(0); }} className="mt-2 text-xs font-medium text-[#a78bfa] hover:text-white">
+                Hammasini ko‘rsatish
+              </button>
+            </div>
+          )}
+          {!invoicesLoading && visibleInvoices.length > 0 && (
             <div className="space-y-2">
-              {invoices.map((inv, i) => (
-                <InvoiceRow key={inv.id} invoice={inv} index={i} onClick={() => setSelectedInvoice(inv)} />
+              {visibleInvoices.map((inv, i) => (
+                <InvoiceRow
+                  key={inv.id}
+                  invoice={inv}
+                  index={i}
+                  onClick={() => setSelectedInvoice(inv)}
+                  onImport={() => rowImportSmartup.mutate(inv.id)}
+                  isImporting={rowImportSmartup.isPending && String(rowImportSmartup.variables ?? '') === String(inv.id)}
+                  importDisabled={rowImportSmartup.isPending}
+                />
               ))}
             </div>
+          )}
+          {invoiceTotalPages > 1 && (
+            <nav
+              className="flex flex-col gap-3 rounded-xl border border-[#1c1c24] bg-[#0f0f16] px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
+              aria-label="Ta’minlashlar sahifalari"
+            >
+              <p className="text-xs text-[#71717a]">
+                {invoiceTotal != null ? (
+                  <>
+                    Jami <span className="font-semibold text-white">{invoiceTotal}</span> ta ·{" "}
+                    <span className="text-[#d4d4d8]">
+                      {invoiceTotal === 0 ? 0 : invoicePage * invoicePageSize + 1}–{Math.min(invoicePage * invoicePageSize + invoices.length, invoiceTotal)}
+                    </span> ko‘rsatilmoqda
+                  </>
+                ) : (
+                  <>Sahifa <span className="font-semibold text-white">{invoicePage + 1}</span> · {invoices.length} ta ko‘rsatilmoqda</>
+                )}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setInvoicePage((p) => Math.max(0, p - 1))}
+                  disabled={invoicePage === 0 || invoicesFetching}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#27272a] bg-[#18181b] px-2.5 text-xs font-medium text-[#d4d4d8] hover:border-[#3f3f46] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 disabled:cursor-not-allowed disabled:opacity-35"
+                  aria-label="Oldingi sahifa"
+                >
+                  <ChevronLeft className="w-3 h-3" />
+                  <span className="hidden sm:inline">Oldingi</span>
+                </button>
+                {invoicePagination.map((item) => item === "ellipsis-left" || item === "ellipsis-right" ? (
+                  <span key={item} className="flex h-8 w-6 items-center justify-center text-xs text-[#52525b]" aria-hidden="true">…</span>
+                ) : (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setInvoicePage(item)}
+                    disabled={invoicesFetching}
+                    aria-current={item === invoicePage ? "page" : undefined}
+                    aria-label={`${item + 1}-sahifa`}
+                    className={cn(
+                      "flex h-8 min-w-8 items-center justify-center rounded-lg border px-2 text-xs font-semibold tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 disabled:cursor-wait",
+                      item === invoicePage
+                        ? "border-[#8b5cf6]/60 bg-[#8b5cf6] text-white shadow-[0_0_0_1px_rgba(139,92,246,.15)]"
+                        : "border-[#27272a] bg-[#18181b] text-[#a1a1aa] hover:border-[#3f3f46] hover:text-white",
+                    )}
+                  >
+                    {item + 1}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setInvoicePage((p) => p + 1)}
+                  disabled={invoicePage >= invoiceTotalPages - 1 || invoicesFetching}
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#27272a] bg-[#18181b] px-2.5 text-xs font-medium text-[#d4d4d8] hover:border-[#3f3f46] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/60 disabled:cursor-not-allowed disabled:opacity-35"
+                  aria-label="Keyingi sahifa"
+                >
+                  <span className="hidden sm:inline">Keyingi</span>
+                  <ChevronRight className="w-3 h-3" />
+                </button>
+              </div>
+            </nav>
           )}
         </>
       )}
 
-      <OrderDetailModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />
-      <InvoiceDetailModal invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} />
-      <CreateInvoiceModal
+      {selectedOrder && <OrderDetailModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />}
+      {selectedInvoice && <InvoiceDetailModal invoice={selectedInvoice} onClose={() => setSelectedInvoice(null)} />}
+      {createInvoiceOpen && <CreateInvoiceModal
         open={createInvoiceOpen}
         orders={selectedOrders}
         onClose={() => setCreateInvoiceOpen(false)}
         onCreated={() => {
           setSelectedOrderIds(new Set());
           setSection("invoices");
+          setInvoicePage(0);
           refetchInvoices();
         }}
-      />
+      />}
     </div>
   );
 }

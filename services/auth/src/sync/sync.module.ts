@@ -11,6 +11,7 @@ import { OrdersModule } from '../marketplace/orders/orders.module';
 import { FinanceModule } from '../marketplace/finance/finance.module';
 import { InventoryModule } from '../marketplace/inventory/inventory.module';
 import { DatabaseModule } from '../common/database/database.module';
+import { StoreOwnerGuard } from '../common/guards/store-owner.guard';
 
 @Module({
   imports: [
@@ -24,7 +25,7 @@ import { DatabaseModule } from '../common/database/database.module';
     InventoryModule,
   ],
   controllers: [SyncController],
-  providers: [SyncService, SyncProcessor, SyncScheduler],
+  providers: [SyncService, SyncProcessor, SyncScheduler, StoreOwnerGuard],
   exports: [SyncService],
 })
 export class SyncModule {}

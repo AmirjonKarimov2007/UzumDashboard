@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/database/prisma.service';
 import { UzumApiClient } from '../../uzum/client/uzum-api.client';
 import { StoresService } from '../stores/stores.service';
@@ -6,6 +6,14 @@ import { subDays, format, eachDayOfInterval, parseISO, startOfDay } from 'date-f
 import { Decimal } from '@prisma/client/runtime/library';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { CreateManualWithdrawalDto, UpdateManualWithdrawalDto } from './dto/manual-withdrawal.dto';
+import { CreateSupplierPaymentDto, UpdateSupplierPaymentDto } from './dto/supplier-payment.dto';
+
+const TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
+// Uzum's no-date expenses response is capped at 1,500 rows and can return
+// totalElements=0 even when more rows exist. Always request the dated ledger
+// from a deliberately old boundary so totals cover the seller's full history.
+const FINANCE_LEDGER_FROM_MS = Date.UTC(2020, 0, 1);
 
 // Heuristic: keywords (multi-lingual) that mark a payment expense as a withdrawal/payout.
 // Uzum returns Russian descriptions; we also accept Uzbek + English fallbacks.
@@ -34,7 +42,24 @@ const FINE_KEYWORDS = [
   'fine',           // en
   'forfeit',        // en
   'sanction',       // en
-  'uzum market',    // Uzum's source name for platform fines/penalties
+];
+
+const STORAGE_KEYWORDS = [
+  'хранен',
+  'склад',
+  'saqlash',
+  'ombor',
+  'storage',
+  'warehouse',
+];
+
+const EXTENSION_KEYWORDS = [
+  'продлен',
+  'продлев',
+  'узайтир',
+  'uzaytir',
+  'extension',
+  'extend',
 ];
 
 // Keywords that identify service payments — logistics, delivery, packaging,
@@ -96,6 +121,50 @@ const isIncome = (e: { type?: string; description?: string; source?: string; amo
   return matchesAny(INCOME_KEYWORDS, e);
 };
 
+type FinanceExpenseBucket = 'logistics' | 'fine' | 'marketing' | 'storage' | 'extension' | 'service' | 'other' | 'refund';
+
+/**
+ * Uzum returns paymentPrice as the price for one unit and amount as the unit
+ * count. Keeping this calculation in one place prevents one report from using
+ * paymentPrice while another multiplies it by amount.
+ */
+export const financeExpenseAmount = (expense: { paymentPrice?: unknown; amount?: unknown }): number => {
+  const unitPrice = Math.abs(Number(expense.paymentPrice ?? 0));
+  const quantity = Number(expense.amount ?? 1) || 1;
+  return unitPrice * quantity;
+};
+
+/** Classify by the transaction's meaning, never by a broad source name alone. */
+export const classifyFinanceExpense = (expense: {
+  type?: string;
+  source?: string;
+  name?: string;
+  description?: string;
+  comment?: string;
+}): FinanceExpenseBucket => {
+  const direction = String(expense.type || '').toUpperCase();
+  if (direction === 'INCOME') return 'refund';
+
+  const source = String(expense.source || '').trim().toLowerCase();
+  const description = String(expense.name || expense.description || expense.comment || '').toLowerCase();
+  const blob = `${source} ${description}`;
+  const marketing =
+    source.includes('marketing') || blob.includes("targ'ib") || blob.includes('targ‘ib') ||
+    blob.includes('targib') || blob.includes('reklam') || blob.includes('реклам') ||
+    blob.includes('продвиж') || blob.includes('promotion') || blob.includes('advertis');
+
+  if (marketing) return 'marketing';
+  if (EXTENSION_KEYWORDS.some((keyword) => blob.includes(keyword))) return 'extension';
+  if (STORAGE_KEYWORDS.some((keyword) => blob.includes(keyword))) return 'storage';
+  // "Uzum Market" is a source/category, not proof of a fine. The description
+  // must itself identify a penalty; this avoids classifying ordinary services
+  // and storage charges as fines.
+  if (FINE_KEYWORDS.some((keyword) => description.includes(keyword))) return 'fine';
+  if (source.includes('logistik')) return 'logistics';
+  if (SERVICE_KEYWORDS.some((keyword) => blob.includes(keyword))) return 'service';
+  return 'other';
+};
+
 @Injectable()
 export class FinanceSyncService {
   private readonly logger = new Logger(FinanceSyncService.name);
@@ -106,6 +175,147 @@ export class FinanceSyncService {
   private readonly RECON_CACHE_TTL_MS = 5 * 60 * 1000;
   // Track in-flight requests so concurrent page loads share a single Uzum fetch.
   private reconInflight = new Map<string, Promise<any>>();
+
+  private clearReconciliationCache(storeId: string) {
+    for (const key of this.reconCache.keys()) {
+      if (key.startsWith(`${storeId}:`)) this.reconCache.delete(key);
+    }
+  }
+
+  async getManualWithdrawals(userId: string, storeId: string, opts: { dateFrom?: number; dateTo?: number } = {}) {
+    await this.storesService.getStore(userId, storeId);
+    const where: any = { storeId, deletedAt: null };
+    if (opts.dateFrom != null || opts.dateTo != null) {
+      where.occurredAt = {
+        ...(opts.dateFrom != null ? { gte: new Date(opts.dateFrom) } : {}),
+        ...(opts.dateTo != null ? { lte: new Date(opts.dateTo) } : {}),
+      };
+    }
+    const entries = await this.prisma.manualWithdrawal.findMany({
+      where,
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    return {
+      entries: entries.map((entry) => ({ ...entry, amount: Number(entry.amount), occurredAt: entry.occurredAt.getTime() })),
+      total: entries.reduce((sum, entry) => sum + Number(entry.amount), 0),
+      count: entries.length,
+    };
+  }
+
+  async createManualWithdrawal(userId: string, storeId: string, dto: CreateManualWithdrawalDto) {
+    await this.storesService.getStore(userId, storeId);
+    const entry = await this.prisma.manualWithdrawal.create({
+      data: {
+        storeId,
+        amount: dto.amount,
+        occurredAt: new Date(dto.occurredAt),
+        reference: dto.reference?.trim() || null,
+        status: dto.status?.trim() || 'bajarildi',
+        note: dto.note?.trim() || null,
+      },
+    });
+    this.clearReconciliationCache(storeId);
+    return { ...entry, amount: Number(entry.amount), occurredAt: entry.occurredAt.getTime() };
+  }
+
+  async updateManualWithdrawal(userId: string, storeId: string, withdrawalId: string, dto: UpdateManualWithdrawalDto) {
+    await this.storesService.getStore(userId, storeId);
+    const existing = await this.prisma.manualWithdrawal.findFirst({ where: { id: withdrawalId, storeId, deletedAt: null } });
+    if (!existing) throw new NotFoundException("Yechib olish yozuvi topilmadi");
+    const entry = await this.prisma.manualWithdrawal.update({
+      where: { id: withdrawalId },
+      data: {
+        ...(dto.amount != null ? { amount: dto.amount } : {}),
+        ...(dto.occurredAt ? { occurredAt: new Date(dto.occurredAt) } : {}),
+        ...(dto.reference !== undefined ? { reference: dto.reference.trim() || null } : {}),
+        ...(dto.status !== undefined ? { status: dto.status.trim() || 'bajarildi' } : {}),
+        ...(dto.note !== undefined ? { note: dto.note.trim() || null } : {}),
+      },
+    });
+    this.clearReconciliationCache(storeId);
+    return { ...entry, amount: Number(entry.amount), occurredAt: entry.occurredAt.getTime() };
+  }
+
+  async deleteManualWithdrawal(userId: string, storeId: string, withdrawalId: string) {
+    await this.storesService.getStore(userId, storeId);
+    const existing = await this.prisma.manualWithdrawal.findFirst({ where: { id: withdrawalId, storeId, deletedAt: null } });
+    if (!existing) throw new NotFoundException("Yechib olish yozuvi topilmadi");
+    await this.prisma.manualWithdrawal.update({ where: { id: withdrawalId }, data: { deletedAt: new Date() } });
+    this.clearReconciliationCache(storeId);
+    return { deleted: true, id: withdrawalId };
+  }
+
+  async getSupplierPayments(userId: string, storeId: string, opts: { dateFrom?: number; dateTo?: number } = {}) {
+    await this.storesService.getStore(userId, storeId);
+    const where: any = { storeId, deletedAt: null };
+    if (opts.dateFrom != null || opts.dateTo != null) {
+      where.occurredAt = {
+        ...(opts.dateFrom != null ? { gte: new Date(opts.dateFrom) } : {}),
+        ...(opts.dateTo != null ? { lte: new Date(opts.dateTo) } : {}),
+      };
+    }
+    const entries = await this.prisma.supplierPayment.findMany({
+      where,
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    const bySupplier = new Map<string, number>();
+    for (const entry of entries) {
+      bySupplier.set(entry.supplierName, (bySupplier.get(entry.supplierName) || 0) + Number(entry.amount));
+    }
+    return {
+      entries: entries.map((entry) => ({ ...entry, amount: Number(entry.amount), occurredAt: entry.occurredAt.getTime() })),
+      total: entries.reduce((sum, entry) => sum + Number(entry.amount), 0),
+      count: entries.length,
+      bySupplier: [...bySupplier.entries()]
+        .map(([supplierName, amount]) => ({ supplierName, amount }))
+        .sort((a, b) => b.amount - a.amount),
+    };
+  }
+
+  async createSupplierPayment(userId: string, storeId: string, dto: CreateSupplierPaymentDto) {
+    await this.storesService.getStore(userId, storeId);
+    const supplierName = dto.supplierName.trim();
+    if (!supplierName) throw new BadRequestException("Ta'minotchi nomini kiriting");
+    const entry = await this.prisma.supplierPayment.create({
+      data: {
+        storeId,
+        supplierName,
+        amount: dto.amount,
+        occurredAt: new Date(dto.occurredAt),
+        paymentMethod: dto.paymentMethod?.trim() || null,
+        reference: dto.reference?.trim() || null,
+        note: dto.note?.trim() || null,
+      },
+    });
+    return { ...entry, amount: Number(entry.amount), occurredAt: entry.occurredAt.getTime() };
+  }
+
+  async updateSupplierPayment(userId: string, storeId: string, paymentId: string, dto: UpdateSupplierPaymentDto) {
+    await this.storesService.getStore(userId, storeId);
+    const existing = await this.prisma.supplierPayment.findFirst({ where: { id: paymentId, storeId, deletedAt: null } });
+    if (!existing) throw new NotFoundException("Ta'minotchiga to'lov yozuvi topilmadi");
+    const supplierName = dto.supplierName?.trim();
+    const entry = await this.prisma.supplierPayment.update({
+      where: { id: paymentId },
+      data: {
+        ...(dto.supplierName !== undefined ? { supplierName: supplierName || existing.supplierName } : {}),
+        ...(dto.amount != null ? { amount: dto.amount } : {}),
+        ...(dto.occurredAt ? { occurredAt: new Date(dto.occurredAt) } : {}),
+        ...(dto.paymentMethod !== undefined ? { paymentMethod: dto.paymentMethod.trim() || null } : {}),
+        ...(dto.reference !== undefined ? { reference: dto.reference.trim() || null } : {}),
+        ...(dto.note !== undefined ? { note: dto.note.trim() || null } : {}),
+      },
+    });
+    return { ...entry, amount: Number(entry.amount), occurredAt: entry.occurredAt.getTime() };
+  }
+
+  async deleteSupplierPayment(userId: string, storeId: string, paymentId: string) {
+    await this.storesService.getStore(userId, storeId);
+    const existing = await this.prisma.supplierPayment.findFirst({ where: { id: paymentId, storeId, deletedAt: null } });
+    if (!existing) throw new NotFoundException("Ta'minotchiga to'lov yozuvi topilmadi");
+    await this.prisma.supplierPayment.update({ where: { id: paymentId }, data: { deletedAt: new Date() } });
+    return { deleted: true, id: paymentId };
+  }
 
   // ─── Disk cache (JSON) ─────────────────────────────────────────────────
   // For resilience: if Uzum API fails or rate-limits mid-fetch, we still have
@@ -211,10 +421,10 @@ export class FinanceSyncService {
 
   // ─── Lightweight Logistics + Fines summary ─────────────────────────────
   //
-  // Hits /v1/finance/expenses?page=0&size=1500&shopId=X&shopIds=X once,
+  // Reads the complete dated /v1/finance/expenses ledger page by page,
   // partitions payments into:
   //   • logistics  — source matches "Logistika"
-  //   • fines      — source is "Uzum Market" OR matches "ombor" (Uzum warehouse fines)
+  //   • fines      — description explicitly identifies a penalty/jarima
   // Returns just the totals + counts — no balance, no P&L, no other expense buckets.
   // Served via stale-while-revalidate (instant after first load).
 
@@ -230,32 +440,41 @@ export class FinanceSyncService {
   private async computeLogisticsAndFines(userId: string, storeId: string) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
 
-    // Paginate expenses using Uzum's `totalElements` to know when to stop — no more
-    // 11 separate FBS-count calls just to guess a size. One big page usually suffices.
-    const SIZE = 1500;
-    const payments: any[] = [];
-    for (let page = 0; page < 20; page++) {
-      const { payments: pg, totalElements } = await this.uzumClient.getRawExpenses(
-        storeId, apiKey, uzumShopId, page, SIZE,
-      );
-      payments.push(...pg);
-      if (pg.length < SIZE || payments.length >= totalElements) break;
-    }
+    // A no-date request is capped at 1,500 rows and Uzum sometimes reports
+    // totalElements=0 for that response. That used to silently omit older fines.
+    // A dated request returns the real total and can therefore be fully paginated.
+    const fetchedPayments = await this.uzumClient.getAllExpenses(
+      storeId,
+      apiKey,
+      [uzumShopId],
+      FINANCE_LEDGER_FROM_MS,
+      Date.now(),
+      true,
+    );
+
+    // The ledger can change while it is being paginated. De-duplicate stable IDs so
+    // an entry shifted between two pages cannot be counted twice.
+    const payments = [...new Map(fetchedPayments.map((entry: any, index: number) => {
+      const stableId = entry?.id != null
+        ? `id:${String(entry.id)}`
+        : `fallback:${String(entry?.source || '')}:${String(entry?.name || entry?.description || '')}:${String(entry?.dateCreated || entry?.date || '')}:${String(entry?.paymentPrice || '')}:${String(entry?.amount || '')}:${index}`;
+      return [stableId, entry] as const;
+    })).values()];
 
     type Item = { id: string; amount: number; source: string; description: string; date: number | null; status: string };
     const logistics: Item[] = [];
     const fines: Item[] = [];
     const marketing: Item[] = []; // pulli targ'ibot / reklama (source "Marketing")
-    const other: Item[] = [];     // kategoriyaga tushmagan boshqa OUTCOME xarajatlar
+    const storage: Item[] = [];   // saqlash/ombor xizmatlari va shu turdagi jarimalar
+    const extensions: Item[] = []; // muddatni uzaytirish to'lovlari va jarimalari
+    const other: Item[] = [];     // kategoriyaga tushmagan boshqa OUTCOME xizmatlar
     const refunds: Item[] = []; // type === "INCOME" — money returned to seller
 
     for (const e of payments) {
       // paymentPrice is PER UNIT; `amount` is the quantity. Real charge = price × qty.
       // (e.g. logistics 8000 × 4 units = 32000 so'm). Older code summed only the unit
       // price which under-counted multi-unit logistics lines.
-      const unitPrice = Math.abs(Number(e.paymentPrice ?? 0));
-      const qty = Number(e.amount ?? 1) || 1;
-      const amount = unitPrice * qty;
+      const amount = financeExpenseAmount(e);
       if (!amount) continue;
       const source = String(e.source || '').trim();
       const description = String(e.name || e.description || e.comment || source);
@@ -266,29 +485,24 @@ export class FinanceSyncService {
 
       // INCOME items = money Uzum returned to the seller (refunds, compensations).
       // Put them in their own bucket so they don't pollute Logistika / Jarimalar.
-      const direction = String(e.type || '').toUpperCase();
-      if (direction === 'INCOME') {
+      const bucket = classifyFinanceExpense(e);
+      if (bucket === 'refund') {
         refunds.push(item);
         continue;
       }
 
-      const src = source.toLowerCase();
-      const blob = `${src} ${description.toLowerCase()}`;
-      // Marketing/reklama: source "Marketing" yoki tavsifda targ'ibot/reklama
-      const isMarketing =
-        src.includes('marketing') ||
-        blob.includes("targ'ib") || blob.includes('targ‘ib') || blob.includes('targib') ||
-        blob.includes('reklam') || blob.includes('реклам') ||
-        blob.includes('продвиж') || blob.includes('promotion') || blob.includes('advertis');
-      if (src.includes('logistik')) {
+      if (bucket === 'logistics') {
         logistics.push(item);
-      } else if (src.includes('uzum market') || src.includes('ombor')) {
-        // "Uzum Market" = platform fines; "Uzum ombori" = warehouse fines
+      } else if (bucket === 'fine') {
         fines.push(item);
-      } else if (isMarketing) {
+      } else if (bucket === 'marketing') {
         marketing.push(item);
+      } else if (bucket === 'storage') {
+        storage.push(item);
+      } else if (bucket === 'extension') {
+        extensions.push(item);
       } else {
-        // Qolgan barcha OUTCOME xarajatlar — jami "yechilgan" to'g'ri bo'lishi uchun
+        // Kategoriyaga tushmagan xizmat ham yashirilmaydi.
         other.push(item);
       }
     }
@@ -296,6 +510,8 @@ export class FinanceSyncService {
     const logisticsTotal = logistics.reduce((s, x) => s + x.amount, 0);
     const finesTotal = fines.reduce((s, x) => s + x.amount, 0);
     const marketingTotal = marketing.reduce((s, x) => s + x.amount, 0);
+    const storageTotal = storage.reduce((s, x) => s + x.amount, 0);
+    const extensionTotal = extensions.reduce((s, x) => s + x.amount, 0);
     const otherTotal = other.reduce((s, x) => s + x.amount, 0);
     const refundsTotal = refunds.reduce((s, x) => s + x.amount, 0);
 
@@ -308,19 +524,30 @@ export class FinanceSyncService {
       marketingTotal,
       marketingCount: marketing.length,
       marketing,
+      storageTotal,
+      storageCount: storage.length,
+      storage,
+      extensionTotal,
+      extensionCount: extensions.length,
+      extensions,
       // Boshqa kategoriyaga tushmagan OUTCOME xarajatlar
       otherTotal,
       otherCount: other.length,
       other,
       // "Jami yechilgan" = BARCHA OUTCOME (Logistika + Jarimalar + Marketing + Boshqa).
       // Refundlar (INCOME) bu yerga kirmaydi.
-      combined: logisticsTotal + finesTotal + marketingTotal + otherTotal,
+      combined: logisticsTotal + finesTotal + marketingTotal + storageTotal + extensionTotal + otherTotal,
       // INCOME bucket — Uzum returned money to seller (refunds, compensations)
       refundsTotal,
       refundsCount: refunds.length,
       totalExpenses: payments.length,
       fbsOrdersCount: payments.length,
       requestedSize: payments.length,
+      calculatedAt: Date.now(),
+      formulas: {
+        expense: 'paymentPrice × amount',
+        netLogistics: 'logistics OUTCOME − logistics INCOME',
+      },
       logistics,
       fines,
       refunds,
@@ -342,11 +569,11 @@ export class FinanceSyncService {
       key: `procwithdraw:${storeId}`,
       ttlMs: this.RECON_CACHE_TTL_MS,
       force: opts.force,
-      producer: () => this.computeProcessingAndWithdraw(userId, storeId),
+      producer: () => this.computeProcessingAndWithdraw(userId, storeId, !!opts.force),
     });
   }
 
-  private async computeProcessingAndWithdraw(userId: string, storeId: string) {
+  private async computeProcessingAndWithdraw(userId: string, storeId: string, forceCosts = false) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
 
     // Paginate each status by Uzum's `total` (totalElements) — no FBS-count loop.
@@ -365,37 +592,120 @@ export class FinanceSyncService {
       return { items, apiTotal };
     };
 
-    // Pul yig'indisi — BARCHA item'lar bo'yicha; soni — UNIQUE orderId bo'yicha.
-    const aggregate = (items: any[]) => {
-      let total = 0;
+    // sellerProfit on the ungrouped API is already net of order logistics.
+    // Uzum's balance tile, however, reports the pre-logistics amount, therefore
+    // grossAfterCommission = sellerProfit + logisticDeliveryFee.
+    const aggregate = (items: any[], onlyOutstanding = false) => {
+      let grossAfterCommission = 0;
+      let netAfterLogistics = 0;
+      let logistics = 0;
+      let commission = 0;
+      let withdrawn = 0;
+      let grossSales = 0;
       const uniqueOrderIds = new Set<string | number>();
+      let itemsCount = 0;
       for (const it of items) {
-        total += Number(it.sellerProfit || 0) + Number(it.logisticDeliveryFee || 0);
+        const sellerProfit = Number(it.sellerProfit || 0);
+        const deliveryFee = Number(it.logisticDeliveryFee || 0);
+        const withdrawnProfit = Number(it.withdrawnProfit || 0);
+        const rowGrossAfterCommission = sellerProfit + deliveryFee;
+        const rowOutstanding = Math.max(0, rowGrossAfterCommission - withdrawnProfit);
+        if (onlyOutstanding && rowOutstanding <= 0) continue;
+
+        grossAfterCommission += onlyOutstanding ? rowOutstanding : rowGrossAfterCommission;
+        netAfterLogistics += onlyOutstanding
+          ? Math.max(0, sellerProfit - Math.max(0, withdrawnProfit - deliveryFee))
+          : sellerProfit;
+        logistics += deliveryFee;
+        commission += Number(it.commission || 0);
+        withdrawn += withdrawnProfit;
+        grossSales += Number(it.sellPrice || 0) * Math.max(0, Number(it.amount || 0) - Number(it.amountReturns || 0));
+        itemsCount++;
         if (it.orderId != null) uniqueOrderIds.add(it.orderId);
       }
-      return { total, uniqueCount: uniqueOrderIds.size, itemsCount: items.length };
+      return {
+        total: grossAfterCommission,
+        grossAfterCommission,
+        netAfterLogistics,
+        logistics,
+        commission,
+        withdrawn,
+        grossSales,
+        uniqueCount: uniqueOrderIds.size,
+        itemsCount,
+      };
     };
 
-    const [processing, withdraw] = await Promise.all([fetchAll('PROCESSING'), fetchAll('TO_WITHDRAW')]);
+    const [processing, withdraw, cost] = await Promise.all([
+      fetchAll('PROCESSING'),
+      fetchAll('TO_WITHDRAW'),
+      this.getCostResolution(userId, storeId, forceCosts),
+    ]);
     const processingAgg = aggregate(processing.items);
-    const withdrawAgg = aggregate(withdraw.items);
+    const withdrawHistoryAgg = aggregate(withdraw.items);
+    const withdrawAgg = aggregate(withdraw.items, true);
+
+    const summarizeCost = (items: any[], outstandingOnly = false) => {
+      let costUsd = 0;
+      let costedQty = 0;
+      let unpricedQty = 0;
+      for (const item of items) {
+        const quantity = Math.max(0, Number(item.amount || 0) - Number(item.amountReturns || 0));
+        const grossAfterCommission = Number(item.sellerProfit || 0) + Number(item.logisticDeliveryFee || 0);
+        const outstanding = Math.max(0, grossAfterCommission - Number(item.withdrawnProfit || 0));
+        const remainingRatio = outstandingOnly
+          ? (grossAfterCommission > 0 ? Math.min(1, outstanding / grossAfterCommission) : 0)
+          : 1;
+        if (remainingRatio <= 0) continue;
+        const effectiveQty = quantity * remainingRatio;
+        let unitCost = item.skuTitle != null ? cost.costByFullTitle[String(item.skuTitle)] : undefined;
+        if (unitCost == null && item.productId != null) unitCost = cost.costByProductId[String(item.productId)];
+        if (unitCost == null) unpricedQty += effectiveQty;
+        else {
+          costUsd += Number(unitCost) * effectiveQty;
+          costedQty += effectiveQty;
+        }
+      }
+      const totalQty = costedQty + unpricedQty;
+      return {
+        costUsd,
+        costedQty,
+        unpricedQty,
+        totalQty,
+        costCoveragePercent: totalQty > 0 ? (costedQty / totalQty) * 100 : 100,
+      };
+    };
+    const processingCost = summarizeCost(processing.items);
+    // TO_WITHDRAW qisman yechilgan bo'lishi mumkin. Tannarx ham aynan qolgan
+    // balans ulushiga mutanosib olinadi, aks holda foyda ortiqcha kamayadi.
+    const withdrawCost = summarizeCost(withdraw.items, true);
 
     return {
       processing: {
-        total: processingAgg.total,
+        ...processingAgg,
         count: processingAgg.uniqueCount,
-        itemsCount: processingAgg.itemsCount,
         apiTotal: processing.apiTotal,
+        ...processingCost,
       },
       withdraw: {
-        total: withdrawAgg.total,
+        ...withdrawAgg,
         count: withdrawAgg.uniqueCount,
-        itemsCount: withdrawAgg.itemsCount,
         apiTotal: withdraw.apiTotal,
+        historyGrossTotal: withdrawHistoryAgg.grossAfterCommission,
+        historyWithdrawnTotal: withdrawHistoryAgg.withdrawn,
+        historyItemsCount: withdraw.items.length,
+        ...withdrawCost,
       },
       combined: processingAgg.total + withdrawAgg.total,
+      currentCostUsd: processingCost.costUsd + withdrawCost.costUsd,
       fbsActiveOrders: processingAgg.uniqueCount + withdrawAgg.uniqueCount,
       requestedSize: SIZE,
+      calculatedAt: Date.now(),
+      formulas: {
+        processing: 'sellerProfit + logisticDeliveryFee',
+        available: 'max(0, sellerProfit + logisticDeliveryFee − withdrawnProfit)',
+        cost: 'ProductMeta.costPrice × (amount − amountReturns)',
+      },
     };
   }
 
@@ -415,17 +725,32 @@ export class FinanceSyncService {
 
   /** Resolve a dashboard time-range id to a [from, to] window. */
   private resolveRange(timeRange: string): { from: Date; to: Date } {
-    const to = new Date();
-    let from: Date;
+    const toMs = Date.now();
+    let fromMs: number;
     switch (timeRange) {
-      case 'week':    from = subDays(to, 7); break;
-      case 'month':   from = subDays(to, 30); break;
-      case 'quarter': from = subDays(to, 90); break;
-      case 'year':    from = subDays(to, 365); break;
+      case 'week':    fromMs = this.tashkentStartOfDay(toMs - 6 * 86_400_000); break;
+      case 'month':   fromMs = this.tashkentStartOfDay(toMs - 29 * 86_400_000); break;
+      case 'quarter': fromMs = this.tashkentStartOfDay(toMs - 89 * 86_400_000); break;
+      case 'year':    fromMs = this.tashkentStartOfDay(toMs - 364 * 86_400_000); break;
       case 'today':
-      default:        from = startOfDay(to); break;
+      default:        fromMs = this.tashkentStartOfDay(toMs); break;
     }
-    return { from, to };
+    return { from: new Date(fromMs), to: new Date(toMs) };
+  }
+
+  private tashkentStartOfDay(ms: number): number {
+    const shifted = new Date(ms + TASHKENT_OFFSET_MS);
+    return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - TASHKENT_OFFSET_MS;
+  }
+
+  private tashkentDayParts(ms: number) {
+    const shifted = new Date(ms + TASHKENT_OFFSET_MS);
+    return {
+      year: shifted.getUTCFullYear(),
+      month: shifted.getUTCMonth(),
+      date: shifted.getUTCDate(),
+      day: shifted.getUTCDay(),
+    };
   }
 
   async getDashboardSummary(
@@ -439,8 +764,8 @@ export class FinanceSyncService {
     const hasCustom = opts.dateFrom != null && opts.dateTo != null;
     const bucket = (ms?: number) => (ms != null ? Math.floor(ms / (60 * 60 * 1000)) : 'x');
     const key = hasCustom
-      ? `dashboard:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}`
-      : `dashboard:${storeId}:${timeRange}`;
+      ? `dashboard:v3:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}`
+      : `dashboard:v3:${storeId}:${timeRange}`;
     return this.swr({
       key,
       ttlMs: this.RECON_CACHE_TTL_MS,
@@ -461,8 +786,8 @@ export class FinanceSyncService {
     const bucket = (ms?: number) => (ms != null ? Math.floor(ms / (60 * 60 * 1000)) : 'x');
     const limit = Math.max(1, Math.min(Number(opts.limit || 200), 500));
     const key = hasCustom
-      ? `sold-products:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}:${limit}`
-      : `sold-products:${storeId}:${timeRange}:${limit}`;
+      ? `sold-products:v2:${storeId}:custom:${bucket(opts.dateFrom)}-${bucket(opts.dateTo)}:${limit}`
+      : `sold-products:v2:${storeId}:${timeRange}:${limit}`;
     return this.swr({
       key,
       ttlMs: this.RECON_CACHE_TTL_MS,
@@ -636,16 +961,19 @@ export class FinanceSyncService {
     const MONTHS_UZ = ['Yan', 'Fev', 'Mar', 'Apr', 'May', 'Iyn', 'Iyl', 'Avg', 'Sen', 'Okt', 'Noy', 'Dek'];
     const pad2 = (n: number) => String(n).padStart(2, '0');
     const bucketOf = (ms: number): { key: string; label: string; sort: number } => {
-      const d = new Date(ms);
+      const d = this.tashkentDayParts(ms);
       if (gran === 'month') {
-        return { key: `${d.getFullYear()}-${d.getMonth()}`, label: `${MONTHS_UZ[d.getMonth()]}`, sort: d.getFullYear() * 12 + d.getMonth() };
+        return { key: `${d.year}-${d.month}`, label: `${MONTHS_UZ[d.month]}`, sort: d.year * 12 + d.month };
       }
       if (gran === 'week') {
-        const dd = new Date(d); const wd = (dd.getDay() + 6) % 7; dd.setDate(dd.getDate() - wd); dd.setHours(0, 0, 0, 0);
-        return { key: `w${dd.getTime()}`, label: `${pad2(dd.getDate())}.${pad2(dd.getMonth() + 1)}`, sort: dd.getTime() };
+        const dayStart = this.tashkentStartOfDay(ms);
+        const wd = (d.day + 6) % 7;
+        const weekStart = dayStart - wd * 86_400_000;
+        const w = this.tashkentDayParts(weekStart);
+        return { key: `w${weekStart}`, label: `${pad2(w.date)}.${pad2(w.month + 1)}`, sort: weekStart };
       }
-      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-      return { key: `d${day.getTime()}`, label: `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`, sort: day.getTime() };
+      const dayStart = this.tashkentStartOfDay(ms);
+      return { key: `d${dayStart}`, label: `${pad2(d.date)}.${pad2(d.month + 1)}`, sort: dayStart };
     };
 
     // ── Aggregate: revenue + tan narx + vidjetlar ──
@@ -663,6 +991,9 @@ export class FinanceSyncService {
     const orderAgg = new Map<string | number, { orderId: any; name: string; sub: string; total: number; items: number; status: string; date: number }>();
 
     for (const it of items) {
+      const dateMs = Number(it.date || it.dateIssued || toMs);
+      if (!Number.isFinite(dateMs) || dateMs < fromMs || dateMs > toMs) continue;
+
       // Bekor qilingan buyurtmalar daromadga/sof foydaga kirmaydi.
       const status = String(it.status || '').toUpperCase();
       if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED') continue;
@@ -677,7 +1008,6 @@ export class FinanceSyncService {
       const qty = Number(it.amount || 0) - Number(it.amountReturns || 0);
 
       // Daromad dinamikasi (kun/hafta/oy)
-      const dateMs = Number(it.date || it.dateIssued || toMs);
       const b = bucketOf(dateMs);
       const ch = chartMap.get(b.key) || { label: b.label, sort: b.sort, revenue: 0, costUsd: 0, qty: 0, orders: new Set<string | number>() };
       ch.revenue += profit;
@@ -834,6 +1164,9 @@ export class FinanceSyncService {
     let returnedUnits = 0;
 
     for (const it of items) {
+      const dateMs = Number(it.date || it.dateIssued || toMs);
+      if (!Number.isFinite(dateMs) || dateMs < fromMs || dateMs > toMs) continue;
+
       const status = String(it.status || '').toUpperCase();
       if (it.cancelled === true || status === 'CANCELED' || status === 'CANCELLED') continue;
 
@@ -845,7 +1178,6 @@ export class FinanceSyncService {
       const skuTitle = String(it.skuTitle || '');
       const name = (pid && cost.titleByProductId[pid]) || it.productTitle || skuTitle || 'Mahsulot';
       const key = pid || skuTitle || name;
-      const dateMs = Number(it.date || it.dateIssued || toMs);
       const row = products.get(key) || {
         id: key,
         productId: pid,
@@ -916,7 +1248,8 @@ export class FinanceSyncService {
    *
    *   balance = SUM(order.transfer) − SUM(withdrawals) − SUM(other deductions)
    *
-   * `dateFrom` and `dateTo` are unix ms. If omitted, fetches the last 2 years.
+   * `dateFrom` and `dateTo` are unix ms. If omitted, fetches the full Uzum
+   * history (from 2020), so the finance screen never silently drops old rows.
    * Results are cached for 5 minutes and concurrent requests for the same range are
    * de-duplicated to a single Uzum fetch (prevents rate-limit cascades).
    */
@@ -943,7 +1276,7 @@ export class FinanceSyncService {
     // ─── Layer 2: Disk cache (fresh hit) ──────────────────────────────────
     if (!opts.force) {
       const disk = await this.readDiskCache(diskPath);
-      if (disk && Date.now() - disk.fetchedAt < this.diskCacheTtlMs) {
+      if (disk && Date.now() - disk.fetchedAt < this.RECON_CACHE_TTL_MS) {
         this.reconCache.set(cacheKey, disk);
         this.logger.log(`Disk cache HIT (fresh): ${path.basename(diskPath)}`);
         return { ...disk.payload, _cached: 'disk', _cachedAt: disk.fetchedAt };
@@ -1045,9 +1378,11 @@ export class FinanceSyncService {
   private async fetchReconciliation(userId: string, storeId: string, dateFrom: number | undefined, dateTo: number | undefined) {
     const { uzumShopId, apiKey } = await this.storesService.getStoreCredentials(userId, storeId);
 
-    // Default to 2 years back if dates not provided (optional according to Swagger)
+    // Full marketplace history by default. Uzum's APIs paginate the response;
+    // keeping this lower bound explicit avoids an accidental "last 2 years"
+    // calculation being presented as the account-wide total.
     const toMs = dateTo ?? Date.now();
-    const fromMs = dateFrom ?? (Date.now() - 2 * 365 * 24 * 60 * 60 * 1000);
+    const fromMs = dateFrom ?? Date.UTC(2020, 0, 1);
 
     this.logger.log(
       `Reconciliation FETCH for store=${storeId} shop=${uzumShopId} from=${new Date(fromMs).toISOString()} to=${new Date(toMs).toISOString()}`,
@@ -1154,6 +1489,7 @@ export class FinanceSyncService {
       const transfer = o.sellerProfit != null
         ? Number(o.sellerProfit)
         : Math.max(0, gross - commission - logistics);
+      const withdrawnProfit = Number(o.withdrawnProfit || 0);
       grossRevenue += gross;
       totalCommission += commission;
       totalLogistics += logistics;
@@ -1164,7 +1500,7 @@ export class FinanceSyncService {
       // sellerProfit + logisticDeliveryFee yig'indisi hisoblanadi
       const st = String(o.status || 'UNKNOWN').toUpperCase();
       if (st === 'TO_WITHDRAW' || st === 'PROCESSING') {
-        currentBalance += transfer + logistics;
+        currentBalance += Math.max(0, transfer + logistics - withdrawnProfit);
       }
 
       ordersByStatus[st] ||= { count: 0, transfer: 0, commission: 0, gross: 0, logistics: 0 };
@@ -1229,7 +1565,7 @@ export class FinanceSyncService {
       // paymentPrice = PER-UNIT money (so'm); e.amount = quantity → real charge = price × qty.
       // Local-DB fallback rows have no paymentPrice and store the money directly in `amount`.
       const amount = e.paymentPrice != null
-        ? Math.abs(Number(e.paymentPrice)) * (Number(e.amount ?? 1) || 1)
+        ? financeExpenseAmount(e)
         : Math.abs(Number(e.amount ?? 0));
       const source = String(e.source || 'UNKNOWN');
       const description = String(e.name || e.description || e.comment || source);
@@ -1253,7 +1589,19 @@ export class FinanceSyncService {
       // Heuristic helpers still useful for non-standard source values
       const ctx = { type: source, description, source: e.source };
 
-      if (isWithdrawal(ctx)) {
+      // Direction is supplied explicitly by Uzum. Every INCOME record must be
+      // credited, even if its source name does not contain a known refund word.
+      if (isIncomeApi || isIncome({ ...ctx, amount: Number(e.paymentPrice ?? e.amount ?? 0) })) {
+        services.push({
+          id: String(e.id ?? `${source}-${dateMs}-${amount}`),
+          type: source,
+          description,
+          amount,
+          direction: 'income',
+          date: dateMs,
+          status,
+        });
+      } else if (isWithdrawal(ctx)) {
         withdrawals.push({
           id: String(e.id ?? `${source}-${dateMs}-${amount}`),
           uzumRef: uzumRef != null ? String(uzumRef) : undefined,
@@ -1322,18 +1670,10 @@ export class FinanceSyncService {
     const netProfitMargin = grossRevenue > 0 ? (netProfit / grossRevenue) * 100 : 0;
 
     // ─── Balance reconciliation ────────────────────────────────────────────
-    // Hozirgi balans: FBS orderlardan (CREATED -> COMPLETED statuslari)
-    // sellerProfit + logisticDeliveryFee yig'indisi
-    const fbsBalance = await this.getFbsBalance(userId, storeId, fromMs, toMs);
-    const computedBalance = fbsBalance.currentBalance;
-
-    // FBS orders byStatus ni asosiy ordersByStatus ga qo'shish
-    for (const [status, agg] of Object.entries(fbsBalance.ordersByStatus)) {
-      ordersByStatus[status] ||= { count: 0, transfer: 0, commission: 0, gross: 0, logistics: 0 };
-      ordersByStatus[status].count += agg.count;
-      ordersByStatus[status].logistics += agg.logistics;
-      ordersByStatus[status].transfer += agg.profit;
-    }
+    // Finance ledger is authoritative here. The old implementation queried
+    // /v2/fbs/orders again and added CREATED→COMPLETED orders, which duplicated
+    // historical rows and used fields that endpoint does not reliably expose.
+    const computedBalance = currentBalance;
 
     // Sort newest first
     withdrawals.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
@@ -1405,9 +1745,9 @@ export class FinanceSyncService {
       },
       balance: {
         computed: computedBalance,
-        formula: 'balance = SUM(FBS orderlarning sellerProfit + logisticDeliveryFee) - CREATED → COMPLETED',
+        formula: 'balance = Σ max(0, sellerProfit + logisticDeliveryFee − withdrawnProfit), status ∈ {PROCESSING, TO_WITHDRAW}',
         breakdown: {
-          fbsOrdersByStatus: fbsBalance.ordersByStatus,
+          financeOrdersByStatus: ordersByStatus,
           totalBalance: computedBalance,
         },
       },

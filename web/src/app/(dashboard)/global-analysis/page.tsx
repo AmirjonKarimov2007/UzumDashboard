@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { cn } from "@/lib/utils";
+import { productImageUrl } from "@/lib/uzum-image";
 
 // Global analiz xizmati (alohida Python jarayoni) — dashboard backendiga tegmaydi.
 const DEFAULT_ANALYZER = process.env.NEXT_PUBLIC_ANALYZER_URL || "http://127.0.0.1:8000";
@@ -489,7 +490,7 @@ export default function GlobalAnalysisPage() {
                         </span>
                         {p.image ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={p.image} alt={p.title} loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
+                          <img src={productImageUrl(p.image, "medium") || ""} alt={p.title} loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center"><Package className="w-8 h-8 text-[#3f3f46]" /></div>
                         )}

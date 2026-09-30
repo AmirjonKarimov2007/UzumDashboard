@@ -26,12 +26,25 @@ import {
   FileSpreadsheet,
   Download,
   Megaphone,
+  Building2,
+  Pencil,
+  Trash2,
+  CircleDollarSign,
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/shared/page-header";
-import { FinanceOverview } from "@/components/finance/finance-overview";
 import { cn } from "@/lib/utils";
-import { useFinanceReconciliation, useLogisticsAndFines, useProcessingAndWithdraw } from "@/hooks/use-finance";
+import {
+  useLogisticsAndFines,
+  useManualWithdrawals,
+  useProcessingAndWithdraw,
+  useDashboardSummary,
+  useSupplierPayments,
+  type LogisticsFinesResponse,
+  type ManualWithdrawalEntry,
+  type ProcessingWithdrawResponse,
+  type SupplierPaymentEntry,
+} from "@/hooks/use-finance";
 import { useDashboardStore, type Currency } from "@/stores/dashboard-store";
 import { formatMoney } from "@/lib/currency";
 
@@ -93,8 +106,18 @@ async function exportFinanceXlsx(opts: {
   dateTo: number;
   logistics: Array<{ description: string; amount: number; date: number | null; status: string; type: string }>;
   fines: Array<{ description: string; amount: number; date: number | null; status?: string; type: string }>;
+  marketing: Array<{ description: string; amount: number; date: number | null; status?: string; type: string }>;
+  storage: Array<{ description: string; amount: number; date: number | null; status?: string; type: string }>;
+  extensions: Array<{ description: string; amount: number; date: number | null; status?: string; type: string }>;
+  other: Array<{ description: string; amount: number; date: number | null; status?: string; type: string }>;
+  refunds: Array<{ description: string; amount: number; date: number | null; status?: string; type: string }>;
   totalLogistics: number;
   totalFines: number;
+  totalMarketing: number;
+  totalStorage: number;
+  totalExtensions: number;
+  totalOther: number;
+  totalRefunds: number;
 }) {
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
@@ -117,7 +140,12 @@ async function exportFinanceXlsx(opts: {
   summary.addRow({ label: "Davr", value: periodStr }).getCell(2).numFmt = "@";
   summary.addRow({ label: "Logistika (jami)", value: opts.totalLogistics });
   summary.addRow({ label: "Jarimalar (jami)", value: opts.totalFines });
-  summary.addRow({ label: "Logistika + Jarima", value: opts.totalLogistics + opts.totalFines });
+  summary.addRow({ label: "Marketing (jami)", value: opts.totalMarketing });
+  summary.addRow({ label: "Saqlash / ombor (jami)", value: opts.totalStorage });
+  summary.addRow({ label: "Uzaytirish (jami)", value: opts.totalExtensions });
+  summary.addRow({ label: "Boshqa xizmatlar (jami)", value: opts.totalOther });
+  summary.addRow({ label: "Qaytarimlar (jami)", value: opts.totalRefunds });
+  summary.addRow({ label: "Sof ushlanmalar", value: opts.totalLogistics + opts.totalFines + opts.totalMarketing + opts.totalStorage + opts.totalExtensions + opts.totalOther - opts.totalRefunds });
   summary.addRow({ label: "Logistika yozuvlari", value: opts.logistics.length }).getCell(2).numFmt = "#,##0";
   summary.addRow({ label: "Jarima yozuvlari", value: opts.fines.length }).getCell(2).numFmt = "#,##0";
 
@@ -171,6 +199,28 @@ async function exportFinanceXlsx(opts: {
   const finTotalRow = fin.addRow({ date: "", description: "", status: "", type: "JAMI", amount: opts.totalFines });
   finTotalRow.font = { bold: true };
   finTotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+
+  for (const extra of [
+    { name: "Marketing", rows: opts.marketing, total: opts.totalMarketing, color: "FFEC4899" },
+    { name: "Saqlash", rows: opts.storage, total: opts.totalStorage, color: "FFF59E0B" },
+    { name: "Uzaytirish", rows: opts.extensions, total: opts.totalExtensions, color: "FFA855F7" },
+    { name: "Boshqa xizmatlar", rows: opts.other, total: opts.totalOther, color: "FFF59E0B" },
+    { name: "Qaytarimlar", rows: opts.refunds, total: opts.totalRefunds, color: "FF10B981" },
+  ]) {
+    const sheet = wb.addWorksheet(extra.name, { properties: { defaultRowHeight: 18 } });
+    sheet.columns = [
+      { header: "Sana", key: "date", width: 14 },
+      { header: "Tavsif", key: "description", width: 70 },
+      { header: "Status", key: "status", width: 16 },
+      { header: "Manba", key: "type", width: 18 },
+      { header: "Summa (so'm)", key: "amount", width: 18, style: { numFmt: '#,##0' } },
+    ];
+    sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: extra.color } };
+    for (const row of extra.rows) sheet.addRow({ ...row, date: fmtDate(row.date), status: row.status || "—" });
+    const totalRow = sheet.addRow({ date: "", description: "", status: "", type: "JAMI", amount: extra.total });
+    totalRow.font = { bold: true };
+  }
 
   // ─── Download ──────────────────────────────────────────────────────────
   const buf = await wb.xlsx.writeBuffer();
@@ -1277,7 +1327,7 @@ function LogisticsAndFinesCard({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-3">
           {/* Logistika */}
           <div className="rounded-xl bg-[#0f0f16]/80 border border-[#f97316]/20 p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -1323,9 +1373,16 @@ function LogisticsAndFinesCard({
             ) : (
               <p className="text-2xl font-bold text-[#ec4899] tabular-nums">{formatSum(totalMarketing)}</p>
             )}
-            <p className="text-[11px] text-[#71717a] mt-1">
-              {marketingCount} ta · targ'ibot{otherCount > 0 ? ` · +${otherCount} boshqa` : ""}
-            </p>
+            <p className="text-[11px] text-[#71717a] mt-1">{marketingCount} ta reklama yozuvi</p>
+          </div>
+
+          <div className="rounded-xl bg-[#0f0f16]/80 border border-[#f59e0b]/20 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-7 h-7 rounded-lg bg-[#f59e0b]/15 flex items-center justify-center"><Receipt className="w-3.5 h-3.5 text-[#fbbf24]" /></div>
+              <p className="text-[11px] text-[#71717a] font-semibold">Boshqa xizmatlar</p>
+            </div>
+            {loading ? <div className="h-8 w-32 rounded bg-[#18181b]/60 animate-pulse" /> : <p className="text-2xl font-bold text-[#fbbf24] tabular-nums">{formatSum(totalOther)}</p>}
+            <p className="text-[11px] text-[#71717a] mt-1">{otherCount} ta yozuv</p>
           </div>
 
           {/* Qaytarilgan pullar — INCOME items (not included in fines or combined) */}
@@ -1357,7 +1414,7 @@ function LogisticsAndFinesCard({
             ) : (
               <p className="text-2xl font-bold text-white tabular-nums">{formatSum(totalCombined)}</p>
             )}
-            <p className="text-[11px] text-[#71717a] mt-1">Logistika + Jarima + Marketing</p>
+            <p className="text-[11px] text-[#71717a] mt-1">Barcha OUTCOME yozuvlari</p>
           </div>
         </div>
       </div>
@@ -1493,7 +1550,7 @@ function parseWithdrawalsText(text: string): ManualWithdrawal[] {
 
 const MANUAL_WITHDRAWALS_STORAGE_KEY = 'uzum_manual_withdrawals';
 
-function ManualWithdrawalsSection({ onTotalChange }: { onTotalChange?: (total: number) => void }) {
+function LegacyManualWithdrawalsSection({ onTotalChange }: { onTotalChange?: (total: number) => void }) {
   const [entries, setEntries] = useState<ManualWithdrawal[]>([]);
   const [inputText, setInputText] = useState('');
   const [expanded, setExpanded] = useState(false);
@@ -1704,6 +1761,135 @@ function ManualWithdrawalsSection({ onTotalChange }: { onTotalChange?: (total: n
 }
 
 /**
+ * Server-backed bank withdrawal ledger. Unlike the former localStorage version,
+ * these rows survive browser/device changes and are available to every permitted
+ * user of the store.
+ */
+function ManualWithdrawalsDatabaseSection({
+  onTotalChange,
+  dateFrom,
+  dateTo,
+}: {
+  onTotalChange?: (total: number) => void;
+  dateFrom?: number;
+  dateTo?: number;
+}) {
+  const { data, isLoading, create, update, remove } = useManualWithdrawals(dateFrom, dateTo);
+  const [reference, setReference] = useState("");
+  const [amount, setAmount] = useState("");
+  const [occurredAt, setOccurredAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useState("");
+  const [paste, setPaste] = useState("");
+  const [editing, setEditing] = useState<ManualWithdrawalEntry | null>(null);
+
+  const entries = data?.entries ?? [];
+  const total = data?.total ?? 0;
+  useEffect(() => onTotalChange?.(total), [onTotalChange, total]);
+
+  const resetForm = () => {
+    setReference(""); setAmount(""); setOccurredAt(new Date().toISOString().slice(0, 10)); setNote(""); setEditing(null);
+  };
+  const submit = async () => {
+    const normalized = Number(amount.replace(/\s/g, "").replace(",", "."));
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+      toast.error("To'g'ri summa kiriting.");
+      return;
+    }
+    const payload = {
+      amount: normalized,
+      occurredAt: new Date(`${occurredAt}T12:00:00`).toISOString(),
+      reference: reference.trim() || undefined,
+      status: "bajarildi",
+      note: note.trim() || undefined,
+    };
+    try {
+      if (editing) {
+        await update.mutateAsync({ id: editing.id, ...payload });
+        toast.success("Yechib olish yozuvi yangilandi.");
+      } else {
+        await create.mutateAsync(payload);
+        toast.success("Yechib olish yozuvi bazaga saqlandi.");
+      }
+      resetForm();
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || "Yozuvni saqlab bo'lmadi.");
+    }
+  };
+  const edit = (entry: ManualWithdrawalEntry) => {
+    setEditing(entry);
+    setReference(entry.reference ?? "");
+    setAmount(String(entry.amount));
+    setOccurredAt(new Date(entry.occurredAt).toISOString().slice(0, 10));
+    setNote(entry.note ?? "");
+  };
+  const deleteEntry = async (entry: ManualWithdrawalEntry) => {
+    if (!confirm(`${entry.reference ? `#${entry.reference}` : "Bu"} yozuv o'chirilsinmi?`)) return;
+    try {
+      await remove.mutateAsync(entry.id);
+      if (editing?.id === entry.id) resetForm();
+      toast.success("Yozuv o'chirildi.");
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || "Yozuvni o'chirib bo'lmadi.");
+    }
+  };
+  const importSms = async () => {
+    const parsed = parseWithdrawalsText(paste);
+    if (!parsed.length) return toast.error("Bank xabaridan summa va so'rov raqami topilmadi.");
+    try {
+      await Promise.all(parsed.map((item) => create.mutateAsync({
+        amount: item.amount,
+        occurredAt: item.date ? new Date(`${item.date}T12:00:00`).toISOString() : new Date().toISOString(),
+        reference: item.orderId,
+        status: item.status,
+      })));
+      setPaste("");
+      toast.success(`${parsed.length} ta yozuv bazaga saqlandi.`);
+    } catch (error: any) {
+      toast.error(error?.response?.data?.message || "Yozuvlarni saqlab bo'lmadi.");
+    }
+  };
+
+  return (
+    <section className="rounded-2xl border border-[#1c1c24] bg-[#0f0f16] overflow-hidden">
+      <div className="px-5 py-4 border-b border-[#1c1c24] flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-[#06b6d4]/15 border border-[#06b6d4]/25 grid place-items-center"><ArrowDownToLine className="w-4.5 h-4.5 text-[#06b6d4]" /></div>
+          <div><h2 className="text-base font-semibold text-white">Yechib olingan pullar</h2><p className="text-[11px] text-[#71717a]">Bazaga saqlanadi · {data?.count ?? 0} ta yozuv · <span className="text-[#06b6d4]">{formatSum(total)}</span></p></div>
+        </div>
+        <span className="rounded-full bg-[#10b981]/10 px-2.5 py-1 text-[10px] text-[#34d399]">Do'kon bo'yicha umumiy tarix</span>
+      </div>
+      <div className="grid xl:grid-cols-[1.1fr_.9fr] border-b border-[#1c1c24]">
+        <div className="p-5 space-y-3">
+          <div className="flex items-center justify-between"><p className="text-sm font-medium text-white">{editing ? "Yozuvni tahrirlash" : "Yangi bank o'tkazmasi"}</p>{editing && <button onClick={resetForm} className="text-xs text-[#a1a1aa] hover:text-white">Bekor qilish</button>}</div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label className="text-[11px] text-[#a1a1aa]">Summa (so'm)<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="3 452 148" className="mt-1.5 w-full rounded-xl border border-[#27272a] bg-[#18181b] px-3 py-2.5 text-sm text-white outline-none focus:border-[#06b6d4]" /></label>
+            <label className="text-[11px] text-[#a1a1aa]">Sana<input type="date" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#27272a] bg-[#18181b] px-3 py-2.5 text-sm text-white outline-none focus:border-[#06b6d4]" /></label>
+            <label className="text-[11px] text-[#a1a1aa]">So'rov / operatsiya raqami<input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="#1729177" className="mt-1.5 w-full rounded-xl border border-[#27272a] bg-[#18181b] px-3 py-2.5 text-sm text-white outline-none focus:border-[#06b6d4]" /></label>
+            <label className="text-[11px] text-[#a1a1aa]">Izoh (ixtiyoriy)<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Bank hisobiga o'tkazildi" className="mt-1.5 w-full rounded-xl border border-[#27272a] bg-[#18181b] px-3 py-2.5 text-sm text-white outline-none focus:border-[#06b6d4]" /></label>
+          </div>
+          <button onClick={submit} disabled={create.isPending || update.isPending} className="inline-flex items-center gap-2 rounded-xl bg-[#0891b2] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#0e7490] disabled:opacity-50"><Plus className="w-4 h-4" />{editing ? "O'zgarishni saqlash" : "Bazaga saqlash"}</button>
+        </div>
+        <div className="p-5 bg-[#0a0a0f]/55 border-t xl:border-t-0 xl:border-l border-[#1c1c24]">
+          <p className="text-sm font-medium text-white">Bank SMS dan import</p><p className="mt-1 text-[11px] leading-5 text-[#71717a]">Bir nechta SMS ni qo'ying. Har bir so'rov raqami va summa alohida saqlanadi.</p>
+          <textarea value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={'#1729177\nbajarildi\n3 452 148 so\'m'} className="mt-3 h-24 w-full resize-none rounded-xl border border-[#27272a] bg-[#18181b] px-3 py-2.5 text-xs text-white outline-none focus:border-[#8b5cf6]" />
+          <button onClick={importSms} disabled={!paste.trim() || create.isPending} className="mt-2 text-xs text-[#a78bfa] hover:text-white disabled:opacity-50">SMS yozuvlarini bazaga import qilish</button>
+        </div>
+      </div>
+      <div className="max-h-[420px] overflow-y-auto divide-y divide-[#1c1c24]">
+        {isLoading ? <div className="p-5 text-sm text-[#71717a]">Yozuvlar yuklanmoqda…</div> : entries.length === 0 ? <div className="p-8 text-center text-sm text-[#71717a]">Hali qo'lda kiritilgan yechib olish yo'q.</div> : entries.map((entry) => (
+          <div key={entry.id} className="flex items-center gap-3 px-5 py-3 hover:bg-[#14141b]">
+            <div className="w-8 h-8 rounded-lg bg-[#06b6d4]/10 grid place-items-center"><ArrowDownToLine className="w-4 h-4 text-[#06b6d4]" /></div>
+            <div className="min-w-0 flex-1"><p className="text-sm font-medium text-white">{entry.reference ? `#${entry.reference}` : "Bank o'tkazmasi"}</p><p className="text-[11px] text-[#71717a]">{formatDate(entry.occurredAt)}{entry.note ? ` · ${entry.note}` : ""}</p></div>
+            <p className="text-sm font-bold tabular-nums text-[#06b6d4]">− {formatSum(entry.amount)}</p>
+            <button onClick={() => edit(entry)} className="px-2 py-1 text-[11px] text-[#a1a1aa] hover:text-white">Tahrirlash</button><button onClick={() => deleteEntry(entry)} disabled={remove.isPending} className="px-2 py-1 text-[11px] text-[#71717a] hover:text-[#ef4444]">O'chirish</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
  * Top-of-page net payout formula:
  *   To'lanadi = Jami to'lanadi − Jami yechilgan − Yechib olingan pullar + Qaytarilgan pullar
  * Shows the big final number plus a transparent step-by-step breakdown of how it's derived.
@@ -1711,19 +1897,17 @@ function ManualWithdrawalsSection({ onTotalChange }: { onTotalChange?: (total: n
 function PayoutFormulaCard({
   jamiTolanadi,
   jamiYechilgan,
-  marketing,
   yechibOlingan,
   qaytarilgan,
   loading,
 }: {
   jamiTolanadi: number;
   jamiYechilgan: number;
-  marketing: number;
   yechibOlingan: number;
   qaytarilgan: number;
   loading: boolean;
 }) {
-  const result = jamiTolanadi - jamiYechilgan - marketing - yechibOlingan + qaytarilgan;
+  const result = jamiTolanadi - jamiYechilgan - yechibOlingan + qaytarilgan;
 
   const terms: Array<{
     op: "+" | "−" | "=";
@@ -1734,9 +1918,8 @@ function PayoutFormulaCard({
     icon: any;
     base?: boolean;
   }> = [
-    { op: "=", label: "Jami to'lanadi",        sub: "Jarayonda + To'langan",                 value: jamiTolanadi, color: "#a78bfa", icon: Wallet,         base: true },
-    { op: "−", label: "Jami yechilgan",        sub: "Logistika + Jarimalar",                 value: jamiYechilgan, color: "#f97316", icon: Truck },
-    { op: "−", label: "Marketing",             sub: "Pulli targ'ibot / reklama",             value: marketing,    color: "#ec4899", icon: Megaphone },
+    { op: "=", label: "Jami to'lanadi",        sub: "Uzum API: buyurtmalarning sellerProfit'i", value: jamiTolanadi, color: "#a78bfa", icon: Wallet,         base: true },
+    { op: "−", label: "Uzum ushlanmalari",     sub: "API: yechishlar, logistika, jarima va boshqalar", value: jamiYechilgan, color: "#f97316", icon: Truck },
     { op: "−", label: "Yechib olingan pullar", sub: "Bankka o'tkazilgan (qo'lda kiritilgan)", value: yechibOlingan, color: "#06b6d4", icon: ArrowDownToLine },
     { op: "+", label: "Qaytarilgan pullar",    sub: "INCOME yozuvlari (qaytarishlar)",       value: qaytarilgan,  color: "#10b981", icon: ArrowUpFromLine },
   ];
@@ -1846,7 +2029,7 @@ function PayoutFormulaCard({
 
         {/* Inline formula caption */}
         <p className="text-[11px] text-[#52525b] mt-4 text-center">
-          Jami to'lanadi − Jami yechilgan − Yechib olingan pullar + Qaytarilgan pullar
+          Uzum API tushumi − API ushlanmalari − bazadagi bank o'tkazmalari + API qaytarimlari
         </p>
       </div>
     </motion.div>
@@ -1945,12 +2128,277 @@ function LogFinesFilterBar({ value, onChange }: { value: LogRange; onChange: (r:
   );
 }
 
+function FinanceAuditOverview({
+  data,
+  expenses,
+  usdRate,
+  loading,
+}: {
+  data?: ProcessingWithdrawResponse;
+  expenses?: LogisticsFinesResponse;
+  usdRate: number;
+  loading: boolean;
+}) {
+  const processing = data?.processing;
+  const processingTotal = processing?.total || 0;
+  const withdrawTotal = data?.withdraw.total || 0;
+  const ordersTotal = processingTotal + withdrawTotal;
+  const logisticsTotal = expenses?.logisticsTotal || 0;
+  const finesTotal = expenses?.finesTotal || 0;
+  const marketingTotal = expenses?.marketingTotal || 0;
+  const storageTotal = expenses?.storageTotal || 0;
+  const extensionTotal = expenses?.extensionTotal || 0;
+  const otherTotal = expenses?.otherTotal || 0;
+  const refundsTotal = expenses?.refundsTotal || 0;
+  const calculatedBalance = ordersTotal - logisticsTotal - finesTotal - marketingTotal - storageTotal - extensionTotal - otherTotal + refundsTotal;
+  const balanceCostUsd = data?.currentCostUsd
+    ?? ((data?.processing.costUsd || 0) + (data?.withdraw.costUsd || 0));
+  const balanceCostUzs = balanceCostUsd * usdRate;
+  const sellerNetProfit = calculatedBalance - balanceCostUzs;
+  const costedQty = (data?.processing.costedQty || 0) + (data?.withdraw.costedQty || 0);
+  const totalQty = (data?.processing.totalQty || 0) + (data?.withdraw.totalQty || 0);
+  const costCoverage = totalQty > 0 ? (costedQty / totalQty) * 100 : 100;
+
+  const formulaItems = [
+    { label: "Jarayondagi pul", value: processingTotal, op: null, tone: "text-[#67e8f9]", hint: "PROCESSING" },
+    { label: "Yechishga tayyor", value: withdrawTotal, op: "+", tone: "text-[#34d399]", hint: "TO_WITHDRAW qoldig‘i" },
+    { label: "Logistika", value: logisticsTotal, op: "−", tone: "text-[#fb923c]", hint: "yetkazish to‘lovlari" },
+    { label: "Marketing", value: marketingTotal, op: "−", tone: "text-[#f472b6]", hint: "reklama va targ‘ibot" },
+    { label: "Saqlash", value: storageTotal, op: "−", tone: "text-[#fbbf24]", hint: "ombor / saqlash" },
+    { label: "Uzaytirish", value: extensionTotal, op: "−", tone: "text-[#c084fc]", hint: "muddat uzaytirish" },
+    { label: "Qolgan jarimalar", value: finesTotal, op: "−", tone: "text-[#f87171]", hint: "boshqa barcha jarima" },
+    { label: "Boshqa xizmatlar", value: otherTotal, op: "−", tone: "text-[#fca5a5]", hint: "qolgan OUTCOME" },
+    { label: "Qaytgan pullar", value: refundsTotal, op: "+", tone: "text-[#6ee7b7]", hint: "INCOME yozuvlari" },
+    { label: "Hozirgi balans", value: calculatedBalance, op: "=", tone: calculatedBalance >= 0 ? "text-white" : "text-[#f87171]", hint: "yakuniy natija", result: true },
+  ];
+
+  return (
+    <section className="overflow-hidden rounded-[20px] border border-[#263041] bg-[#0d1117] shadow-[0_18px_50px_rgba(0,0,0,.18)]">
+      <div className="border-b border-[#263041] px-5 py-6 sm:px-7 sm:py-7">
+        <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-start">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-[#f8fafc]">
+              <Wallet className="h-4 w-4 text-[#22c55e]" />Pul qayerdan chiqdi?
+            </div>
+            <p className="mt-2 max-w-3xl text-xs leading-5 text-[#94a3b8]">
+              Chapdan o‘ngga o‘qing: yashil “+” pulni qo‘shadi, qizil “−” xarajatni ayiradi. Har bir raqam Uzum yozuvlaridan alohida hisoblangan.
+            </p>
+          </div>
+          <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-[#334155] bg-[#111827] px-3 py-1.5 text-[11px] font-medium text-[#cbd5e1]">
+            <Database className="h-3.5 w-3.5 text-[#38bdf8]" />Uzum ochilgandan hozirgacha
+          </span>
+        </div>
+        <div className="mt-6 flex flex-wrap items-end gap-x-4 gap-y-1">
+          <div>
+            <p className="text-xs text-[#94a3b8]">Hozir Uzumda qolgan pul</p>
+            {loading ? <div className="mt-2 h-14 w-72 animate-pulse rounded-xl bg-[#172033]" /> : <p className={cn("mt-1 text-4xl font-bold tracking-[-0.035em] tabular-nums sm:text-5xl", calculatedBalance >= 0 ? "text-[#f8fafc]" : "text-[#f87171]")}>{formatSum(calculatedBalance)}</p>}
+          </div>
+          <p className="pb-1 text-xs text-[#64748b]">Savdo puli: {formatSum(ordersTotal)}</p>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-[#334155] bg-[#080b10] p-3 sm:p-4">
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto_1fr_auto_1.08fr] sm:items-stretch">
+            <div className="rounded-xl border border-[#fbbf24]/25 bg-[#fbbf24]/8 px-4 py-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-[#fcd34d]">Mahsulot tannarxi</p>
+                <Package className="h-4 w-4 text-[#fbbf24]" />
+              </div>
+              {loading ? <div className="mt-2 h-7 w-32 animate-pulse rounded bg-[#1e293b]" /> : <p className="mt-1.5 text-xl font-bold tabular-nums text-[#fbbf24]">{formatSum(balanceCostUzs)}</p>}
+              <p className="mt-1 text-[10px] leading-4 text-[#94a3b8]">Balansda qolgan mahsulotlarning Smartup tan narxi</p>
+            </div>
+
+            <div className="flex items-center justify-center py-1 text-lg font-bold text-[#94a3b8]">+</div>
+
+            <div className={cn("rounded-xl border px-4 py-3.5", sellerNetProfit >= 0 ? "border-[#22c55e]/25 bg-[#22c55e]/8" : "border-[#fb7185]/25 bg-[#fb7185]/8")}>
+              <div className="flex items-center justify-between gap-2">
+                <p className={cn("text-xs font-medium", sellerNetProfit >= 0 ? "text-[#86efac]" : "text-[#fda4af]")}>Seller sof foydasi</p>
+                <TrendingUp className={cn("h-4 w-4", sellerNetProfit >= 0 ? "text-[#4ade80]" : "text-[#fb7185]")} />
+              </div>
+              {loading ? <div className="mt-2 h-7 w-32 animate-pulse rounded bg-[#1e293b]" /> : <p className={cn("mt-1.5 text-xl font-bold tabular-nums", sellerNetProfit >= 0 ? "text-[#4ade80]" : "text-[#fb7185]")}>{formatSum(sellerNetProfit)}</p>}
+              <p className="mt-1 text-[10px] leading-4 text-[#94a3b8]">Hozirgi balans − mahsulot tannarxi</p>
+            </div>
+
+            <div className="flex items-center justify-center py-1 text-lg font-bold text-[#7dd3fc]">=</div>
+
+            <div className="rounded-xl border border-[#38bdf8]/30 bg-[#38bdf8]/10 px-4 py-3.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-[#bae6fd]">Hozirgi jami balans</p>
+                <Equal className="h-4 w-4 text-[#7dd3fc]" />
+              </div>
+              {loading ? <div className="mt-2 h-7 w-32 animate-pulse rounded bg-[#1e293b]" /> : <p className="mt-1.5 text-xl font-bold tabular-nums text-[#f8fafc]">{formatSum(calculatedBalance)}</p>}
+              <p className="mt-1 text-[10px] leading-4 text-[#94a3b8]">Yuqoridagi katta summaning aynan o‘zi</p>
+            </div>
+          </div>
+
+          <div className={cn("mt-3 flex items-start gap-2 rounded-xl px-3 py-2 text-[11px] leading-5", costCoverage >= 99.99 ? "bg-[#22c55e]/8 text-[#86efac]" : "bg-[#fbbf24]/8 text-[#fcd34d]")}>
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <p>
+              Tannarx aniqligi: <span className="font-semibold tabular-nums">{costCoverage.toFixed(1)}%</span>
+              {costCoverage >= 99.99
+                ? " — balansdagi barcha mahsulotlarda tan narx topildi."
+                : ` — ${Math.max(0, totalQty - costedQty).toFixed(1)} dona mahsulotda tan narx yo‘q; seller foydasi hozircha shuncha qismga ortiqcha ko‘rinishi mumkin.`}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto bg-[#080b10]">
+        <div className="flex min-w-max items-stretch p-3 sm:p-4">
+        {formulaItems.map((item, index) => (
+          <div key={item.label} className={cn("relative w-[164px] shrink-0 rounded-xl px-3.5 py-3.5", item.result ? "border border-[#22c55e]/35 bg-[#22c55e]/10" : "bg-[#111827]", index > 0 && "ml-7")}>
+            {item.op && (
+              <span className={cn("absolute -left-6 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full text-sm font-bold", item.op === "+" ? "bg-[#22c55e]/15 text-[#4ade80]" : item.op === "=" ? "bg-[#38bdf8]/15 text-[#7dd3fc]" : "bg-[#ef4444]/15 text-[#fca5a5]")}>
+                {item.op}
+              </span>
+            )}
+            <p className="text-[11px] font-medium leading-4 text-[#94a3b8]">{item.label}</p>
+            {loading ? <div className="mt-2 h-6 w-28 animate-pulse rounded bg-[#1e293b]" /> : (
+              <p className={cn("mt-1.5 text-[15px] font-bold tabular-nums", item.tone)}>{formatSum(item.value)}</p>
+            )}
+            <p className="mt-1 text-[10px] leading-4 text-[#64748b]">{item.hint}</p>
+          </div>
+        ))}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2 border-t border-[#263041] bg-[#0b1018] px-5 py-3 text-[11px] leading-5 text-[#64748b] sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-2">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#38bdf8]" />
+          <p>TO_WITHDRAW ichida avval bankka o‘tkazilgan pul qayta qo‘shilmaydi. Shu sabab bir summa ikki marta sanalmaydi.</p>
+        </div>
+        <p className="shrink-0 text-[#475569]">Oxirgi hisob: {data?.calculatedAt ? new Date(data.calculatedAt).toLocaleString("uz-UZ") : "—"}</p>
+      </div>
+    </section>
+  );
+}
+
+function SmartupProfitSection({
+  period,
+  usdRate,
+  loading,
+}: {
+  period?: { dateFrom: number; dateTo: number; revenue: number; costUsd: number; orders: number; unitsSold: number; coverage: { costedQty: number; totalSoldQty: number } };
+  usdRate: number;
+  loading: boolean;
+}) {
+  const periodCost = (period?.costUsd || 0) * usdRate;
+  const periodProfit = (period?.revenue || 0) - periodCost;
+  const coverage = period?.coverage.totalSoldQty
+    ? Math.round((period.coverage.costedQty / period.coverage.totalSoldQty) * 100)
+    : 100;
+
+  const Row = ({ title, subtitle, first, second, result }: { title: string; subtitle: string; first: { label: string; value: number }; second: { label: string; value: number }; result: { label: string; value: number } }) => (
+    <div className="grid gap-4 p-5 sm:p-6 lg:grid-cols-[190px_1fr] lg:items-center">
+      <div>
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-[#64748b]">{subtitle}</p>
+      </div>
+      <div className="grid items-stretch gap-2 sm:grid-cols-[1fr_auto_1fr_auto_1.1fr]">
+        <div className="rounded-xl bg-[#111827] p-4"><p className="text-[11px] text-[#94a3b8]">{first.label}</p><p className="mt-1 text-lg font-bold tabular-nums text-[#f8fafc]">{loading ? "—" : formatSum(first.value)}</p></div>
+        <div className="hidden items-center text-lg font-bold text-[#f87171] sm:flex">−</div>
+        <div className="rounded-xl bg-[#111827] p-4"><p className="text-[11px] text-[#94a3b8]">{second.label}</p><p className="mt-1 text-lg font-bold tabular-nums text-[#fbbf24]">{loading ? "—" : formatSum(second.value)}</p></div>
+        <div className="hidden items-center text-lg font-bold text-[#7dd3fc] sm:flex">=</div>
+        <div className="rounded-xl border border-[#38bdf8]/30 bg-[#38bdf8]/10 p-4"><p className="text-[11px] text-[#cbd5e1]">{result.label}</p><p className={cn("mt-1 text-xl font-bold tabular-nums", result.value >= 0 ? "text-[#7dd3fc]" : "text-[#f87171]")}>{loading ? "—" : formatSum(result.value)}</p></div>
+      </div>
+    </div>
+  );
+
+  return <section className="overflow-hidden rounded-[20px] border border-[#263041] bg-[#0d1117]">
+    <div className="flex flex-col justify-between gap-3 border-b border-[#263041] px-5 py-5 sm:flex-row sm:items-center sm:px-6">
+      <div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#38bdf8]/12"><CircleDollarSign className="h-5 w-5 text-[#7dd3fc]" /></div><div><h2 className="text-base font-semibold text-white">Smartup bo‘yicha foyda</h2><p className="mt-0.5 text-xs text-[#64748b]">Sotuv puli va mahsulot tannarxi bir joyda</p></div></div>
+      <div className="text-right text-[11px] text-[#64748b]"><p>{period ? `${formatDate(period.dateFrom)} — ${formatDate(period.dateTo)}` : "Tanlangan davr"}</p><p className={coverage < 100 ? "text-[#fbbf24]" : "text-[#4ade80]"}>Tannarx kiritilishi: {coverage}%</p></div>
+    </div>
+    <Row title="Tanlangan davr" subtitle={`${period?.orders || 0} ta order · ${period?.unitsSold || 0} dona sotilgan`} first={{ label: "SellerProfit", value: period?.revenue || 0 }} second={{ label: "Sotilgan mahsulot tannarxi", value: periodCost }} result={{ label: "Davrdagi foyda", value: periodProfit }} />
+    <div className="border-t border-[#263041] bg-[#0b1018] px-5 py-3 text-[11px] leading-5 text-[#64748b]">Tannarxi kiritilmagan mahsulot foydani kattaroq ko‘rsatishi mumkin. “Mahsulotlar” sahifasida barcha Smartup tannarxlarini to‘ldiring.</div>
+  </section>;
+}
+
+function SupplierPaymentsSection({ dateFrom, dateTo }: { dateFrom?: number; dateTo?: number }) {
+  const { data, isLoading, create, update, remove } = useSupplierPayments(dateFrom, dateTo);
+  const [supplierName, setSupplierName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [occurredAt, setOccurredAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [paymentMethod, setPaymentMethod] = useState("Bank");
+  const [reference, setReference] = useState("");
+  const [note, setNote] = useState("");
+  const [editing, setEditing] = useState<SupplierPaymentEntry | null>(null);
+
+  const reset = () => { setSupplierName(""); setAmount(""); setOccurredAt(new Date().toISOString().slice(0, 10)); setPaymentMethod("Bank"); setReference(""); setNote(""); setEditing(null); };
+  const submit = async () => {
+    const parsedAmount = Number(amount.replace(/\s/g, "").replace(",", "."));
+    if (!supplierName.trim()) return toast.error("Ta’minotchi nomini kiriting.");
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) return toast.error("To‘g‘ri summa kiriting.");
+    const payload = { supplierName: supplierName.trim(), amount: parsedAmount, occurredAt: new Date(`${occurredAt}T12:00:00`).toISOString(), paymentMethod, reference: reference.trim() || undefined, note: note.trim() || undefined };
+    try {
+      if (editing) await update.mutateAsync({ id: editing.id, ...payload });
+      else await create.mutateAsync(payload);
+      toast.success(editing ? "Ta’minotchi to‘lovi yangilandi." : "Ta’minotchi to‘lovi saqlandi.");
+      reset();
+    } catch (error: any) { toast.error(error?.response?.data?.message || "To‘lovni saqlab bo‘lmadi."); }
+  };
+  const startEdit = (entry: SupplierPaymentEntry) => { setEditing(entry); setSupplierName(entry.supplierName); setAmount(String(entry.amount)); setOccurredAt(new Date(entry.occurredAt).toISOString().slice(0, 10)); setPaymentMethod(entry.paymentMethod || "Bank"); setReference(entry.reference || ""); setNote(entry.note || ""); };
+  const deleteEntry = async (entry: SupplierPaymentEntry) => {
+    if (!confirm(`${entry.supplierName} uchun ${formatSum(entry.amount)} to‘lov o‘chirilsinmi?`)) return;
+    try { await remove.mutateAsync(entry.id); if (editing?.id === entry.id) reset(); toast.success("To‘lov o‘chirildi."); } catch (error: any) { toast.error(error?.response?.data?.message || "To‘lovni o‘chirib bo‘lmadi."); }
+  };
+
+  return <section className="overflow-hidden rounded-[20px] border border-[#263041] bg-[#0d1117]">
+    <div className="flex flex-col justify-between gap-4 border-b border-[#263041] px-5 py-5 sm:flex-row sm:items-center sm:px-6"><div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#a78bfa]/12"><Building2 className="h-5 w-5 text-[#c4b5fd]" /></div><div><h2 className="text-base font-semibold text-white">Ta’minotchilarga to‘lovlar</h2><p className="mt-0.5 text-xs text-[#64748b]">Kimga, qachon va qancha pul berganingiz</p></div></div><div className="sm:text-right"><p className="text-[11px] text-[#64748b]">Tanlangan davrda jami</p><p className="text-xl font-bold tabular-nums text-[#c4b5fd]">{formatSum(data?.total || 0)}</p></div></div>
+    <div className="grid xl:grid-cols-[.82fr_1.18fr]">
+      <div className="border-b border-[#263041] p-5 xl:border-b-0 xl:border-r sm:p-6">
+        <div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-white">{editing ? "To‘lovni tahrirlash" : "Yangi to‘lov kiritish"}</h3>{editing && <button onClick={reset} className="text-xs text-[#94a3b8] hover:text-white">Bekor qilish</button>}</div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="text-[11px] text-[#94a3b8] sm:col-span-2">Ta’minotchi nomi<input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder="Masalan: Anvar Plast" className="mt-1.5 w-full rounded-xl border border-[#334155] bg-[#111827] px-3 py-2.5 text-sm text-white outline-none focus:border-[#38bdf8]" /></label>
+          <label className="text-[11px] text-[#94a3b8]">Berilgan summa<input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="5 000 000" className="mt-1.5 w-full rounded-xl border border-[#334155] bg-[#111827] px-3 py-2.5 text-sm text-white outline-none focus:border-[#38bdf8]" /></label>
+          <label className="text-[11px] text-[#94a3b8]">Sana<input type="date" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#334155] bg-[#111827] px-3 py-2.5 text-sm text-white outline-none focus:border-[#38bdf8]" /></label>
+          <label className="text-[11px] text-[#94a3b8]">To‘lov usuli<select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#334155] bg-[#111827] px-3 py-2.5 text-sm text-white outline-none focus:border-[#38bdf8]"><option>Bank</option><option>Karta</option><option>Naqd</option><option>Boshqa</option></select></label>
+          <label className="text-[11px] text-[#94a3b8]">Hujjat / operatsiya raqami<input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Ixtiyoriy" className="mt-1.5 w-full rounded-xl border border-[#334155] bg-[#111827] px-3 py-2.5 text-sm text-white outline-none focus:border-[#38bdf8]" /></label>
+          <label className="text-[11px] text-[#94a3b8] sm:col-span-2">Izoh<input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Nima uchun berildi?" className="mt-1.5 w-full rounded-xl border border-[#334155] bg-[#111827] px-3 py-2.5 text-sm text-white outline-none focus:border-[#38bdf8]" /></label>
+        </div>
+        <button onClick={submit} disabled={create.isPending || update.isPending} className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#2563eb] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#1d4ed8] disabled:opacity-50"><Plus className="h-4 w-4" />{editing ? "O‘zgarishni saqlash" : "To‘lovni saqlash"}</button>
+        <p className="mt-3 text-[10px] leading-4 text-[#64748b]">Bu kassa tarixi. Smartup tannarxi foydadan allaqachon ayrilgani uchun bu summa foydadan yana ayirilmaydi.</p>
+      </div>
+      <div>
+        {isLoading ? <div className="grid h-48 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-[#a78bfa]" /></div> : !data?.entries.length ? <div className="grid h-48 place-items-center px-6 text-center text-sm text-[#64748b]">Hozircha ta’minotchiga to‘lov kiritilmagan.</div> : <div className="divide-y divide-[#1e293b]">{data.entries.map((entry) => <div key={entry.id} className="grid gap-3 px-5 py-4 sm:grid-cols-[110px_1fr_auto] sm:items-center"><div><p className="text-xs text-[#94a3b8]">{formatDate(entry.occurredAt)}</p><p className="mt-1 text-[10px] text-[#64748b]">{entry.paymentMethod || "—"}</p></div><div className="min-w-0"><p className="text-sm font-semibold text-white">{entry.supplierName}</p><p className="mt-1 truncate text-[11px] text-[#64748b]">{[entry.reference, entry.note].filter(Boolean).join(" · ") || "Izoh yo‘q"}</p></div><div className="flex items-center justify-between gap-3 sm:justify-end"><p className="text-sm font-bold tabular-nums text-[#c4b5fd]">{formatSum(entry.amount)}</p><div className="flex gap-1"><button onClick={() => startEdit(entry)} aria-label="Tahrirlash" className="grid h-8 w-8 place-items-center rounded-lg text-[#94a3b8] hover:bg-[#1e293b] hover:text-white"><Pencil className="h-3.5 w-3.5" /></button><button onClick={() => deleteEntry(entry)} aria-label="O‘chirish" className="grid h-8 w-8 place-items-center rounded-lg text-[#64748b] hover:bg-[#ef4444]/10 hover:text-[#f87171]"><Trash2 className="h-3.5 w-3.5" /></button></div></div></div>)}</div>}
+      </div>
+    </div>
+  </section>;
+}
+
+type LedgerTab = "logistics" | "marketing" | "storage" | "extensions" | "fines" | "other" | "refunds";
+
+function ExpenseAuditLedger({ data, loading }: { data?: LogisticsFinesResponse; loading: boolean }) {
+  const [tab, setTab] = useState<LedgerTab>("fines");
+  const [visibleCount, setVisibleCount] = useState(20);
+  const tabs: Array<{ id: LedgerTab; label: string; items: Array<{ id: string; amount: number; source: string; description: string; date: number | null; status: string }>; total: number; color: string }> = [
+    { id: "logistics", label: "Logistika", items: data?.logistics || [], total: data?.logisticsTotal || 0, color: "#fb923c" },
+    { id: "marketing", label: "Marketing", items: data?.marketing || [], total: data?.marketingTotal || 0, color: "#f472b6" },
+    { id: "storage", label: "Saqlash", items: data?.storage || [], total: data?.storageTotal || 0, color: "#fbbf24" },
+    { id: "extensions", label: "Uzaytirish", items: data?.extensions || [], total: data?.extensionTotal || 0, color: "#c084fc" },
+    { id: "fines", label: "Qolgan jarimalar", items: data?.fines || [], total: data?.finesTotal || 0, color: "#f87171" },
+    { id: "other", label: "Boshqa xizmatlar", items: data?.other || [], total: data?.otherTotal || 0, color: "#fbbf24" },
+    { id: "refunds", label: "Qaytarimlar", items: data?.refunds || [], total: data?.refundsTotal || 0, color: "#34d399" },
+  ];
+  const active = tabs.find((item) => item.id === tab)!;
+  const visible = active.items.slice(0, visibleCount);
+
+  return <section className="overflow-hidden rounded-2xl border border-[#262632] bg-[#0f0f16]">
+    <div className="border-b border-[#262632] p-4 sm:p-5">
+      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+        <div><h2 className="text-base font-semibold text-white">Ushlanmalar tafsiloti</h2><p className="mt-1 text-xs text-[#71717a]">Har bir summa Uzumning finance/expenses yozuvidan; jarima sababi matni bilan ko‘rsatiladi.</p></div>
+        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">{tabs.map((item) => <button key={item.id} onClick={() => { setTab(item.id); setVisibleCount(20); }} className={cn("whitespace-nowrap rounded-lg border px-3 py-2 text-xs transition", tab === item.id ? "border-[#3f3f46] bg-[#27272a] text-white" : "border-transparent bg-[#18181b] text-[#71717a] hover:text-white")}>{item.label} <span className="ml-1 tabular-nums" style={{ color: item.color }}>{item.items.length}</span></button>)}</div>
+      </div>
+    </div>
+    <div className="flex items-center justify-between border-b border-[#262632] bg-[#111118] px-4 py-3 sm:px-5"><p className="text-xs text-[#71717a]">{active.label} jami</p><p className="text-base font-semibold tabular-nums" style={{ color: active.color }}>{tab === "refunds" ? "+ " : "− "}{formatSum(active.total)}</p></div>
+    {loading ? <div className="flex h-40 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-[#8b5cf6]" /></div> : !active.items.length ? <div className="flex h-40 items-center justify-center text-sm text-[#71717a]">Bu turdagi yozuv topilmadi</div> : <div className="divide-y divide-[#1c1c24]">{visible.map((item) => <div key={item.id} className="grid gap-2 px-4 py-3 sm:grid-cols-[105px_1fr_140px] sm:items-center sm:px-5"><div className="text-[11px] text-[#71717a]">{formatDate(item.date)}<p className="mt-0.5 text-[9px] text-[#52525b]">{item.status}</p></div><div className="min-w-0"><p className="text-xs leading-5 text-[#d4d4d8]" title={item.description}>{item.description || item.source}</p><p className="mt-0.5 text-[10px] text-[#52525b]">{item.source}</p></div><p className="text-sm font-semibold tabular-nums sm:text-right" style={{ color: active.color }}>{tab === "refunds" ? "+ " : "− "}{formatSum(item.amount)}</p></div>)}</div>}
+    {visibleCount < active.items.length && <button onClick={() => setVisibleCount((count) => count + 20)} className="w-full border-t border-[#262632] px-4 py-3 text-xs text-[#a1a1aa] hover:bg-[#18181b] hover:text-white">Yana {Math.min(20, active.items.length - visibleCount)} ta ko‘rsatish</button>}
+  </section>;
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function FinancePage() {
   const [exporting, setExporting] = useState(false);
-  // Reported up from ManualWithdrawalsSection (localStorage-backed bank withdrawals)
-  const [manualWithdrawnTotal, setManualWithdrawnTotal] = useState(0);
 
   // Currency display: drive formatSum() across the whole page. Set synchronously
   // during render so child components format in the chosen currency this pass.
@@ -1969,16 +2417,19 @@ export default function FinancePage() {
     refresh: refreshPw,
   } = useProcessingAndWithdraw();
 
-  // All-time totals (used by the "To'lanadi" formula — cumulative balance).
-  const totalLogistics = data?.logisticsTotal ?? 0;
-  const totalFines = data?.finesTotal ?? 0;
-  const totalMarketing = data?.marketingTotal ?? 0;
-  const totalOther = data?.otherTotal ?? 0;
-  const totalRefunds = data?.refundsTotal ?? 0;
-
   // ── Logistika/Jarimalar kartasi uchun davr filtri (client-side) ──
   // null = Hammasi. Filtr faqat shu kartaga va Excel eksportga ta'sir qiladi.
   const [logFilter, setLogFilter] = useState<LogRange>(null);
+  const reportRange = useMemo(() => ({
+    dateFrom: logFilter?.from ?? DEFAULT_FROM_MS,
+    dateTo: logFilter?.to ?? todayEndMs(),
+  }), [logFilter]);
+  const {
+    data: periodData,
+    isLoading: periodLoading,
+    isFetching: periodFetching,
+    refresh: refreshPeriod,
+  } = useDashboardSummary("year", reportRange);
   const lf = useMemo(() => {
     const inRange = (ms: number | null) => {
       if (!logFilter) return true;
@@ -1990,19 +2441,43 @@ export default function FinancePage() {
     const logistics = pick(data?.logistics);
     const fines = pick(data?.fines);
     const marketing = pick(data?.marketing);
+    const storage = pick(data?.storage);
+    const extensions = pick(data?.extensions);
     const other = pick(data?.other);
     const refunds = pick(data?.refunds);
     return {
-      logistics, fines, marketing, other, refunds,
+      logistics, fines, marketing, storage, extensions, other, refunds,
       logisticsTotal: sum(logistics), finesTotal: sum(fines),
-      marketingTotal: sum(marketing), otherTotal: sum(other), refundsTotal: sum(refunds),
+      marketingTotal: sum(marketing), storageTotal: sum(storage), extensionTotal: sum(extensions),
+      otherTotal: sum(other), refundsTotal: sum(refunds),
     };
   }, [data, logFilter]);
 
-  // ── "To'lanadi" formula inputs ──
-  const jamiTolanadi = (pwData?.processing.total ?? 0) + (pwData?.withdraw.total ?? 0);
-  // Jami yechilgan = Logistika + Jarima + boshqa (Marketing alohida qatorda chiqadi)
-  const jamiYechilgan = totalLogistics + totalFines + totalOther;
+  const filteredExpenses = useMemo<LogisticsFinesResponse | undefined>(() => data ? ({
+    ...data,
+    logistics: lf.logistics,
+    logisticsTotal: lf.logisticsTotal,
+    logisticsCount: lf.logistics.length,
+    fines: lf.fines,
+    finesTotal: lf.finesTotal,
+    finesCount: lf.fines.length,
+    marketing: lf.marketing,
+    marketingTotal: lf.marketingTotal,
+    marketingCount: lf.marketing.length,
+    storage: lf.storage,
+    storageTotal: lf.storageTotal,
+    storageCount: lf.storage.length,
+    extensions: lf.extensions,
+    extensionTotal: lf.extensionTotal,
+    extensionCount: lf.extensions.length,
+    other: lf.other,
+    otherTotal: lf.otherTotal,
+    otherCount: lf.other.length,
+    refunds: lf.refunds,
+    refundsTotal: lf.refundsTotal,
+    refundsCount: lf.refunds.length,
+    combined: lf.logisticsTotal + lf.finesTotal + lf.marketingTotal + lf.storageTotal + lf.extensionTotal + lf.otherTotal,
+  }) : undefined, [data, lf]);
 
   const handleExport = async () => {
     if (!data) return;
@@ -2025,8 +2500,18 @@ export default function FinancePage() {
           status: x.status,
           type: x.source,
         })),
+        marketing: lf.marketing.map((x) => ({ description: x.description, amount: x.amount, date: x.date, status: x.status, type: x.source })),
+        storage: lf.storage.map((x) => ({ description: x.description, amount: x.amount, date: x.date, status: x.status, type: x.source })),
+        extensions: lf.extensions.map((x) => ({ description: x.description, amount: x.amount, date: x.date, status: x.status, type: x.source })),
+        other: lf.other.map((x) => ({ description: x.description, amount: x.amount, date: x.date, status: x.status, type: x.source })),
+        refunds: lf.refunds.map((x) => ({ description: x.description, amount: x.amount, date: x.date, status: x.status, type: x.source })),
         totalLogistics: lf.logisticsTotal,
         totalFines: lf.finesTotal,
+        totalMarketing: lf.marketingTotal,
+        totalStorage: lf.storageTotal,
+        totalExtensions: lf.extensionTotal,
+        totalOther: lf.otherTotal,
+        totalRefunds: lf.refundsTotal,
       });
       toast.success("Excel fayli yuklab olindi");
     } catch (err: any) {
@@ -2048,22 +2533,19 @@ export default function FinancePage() {
       <PageHeader
         title="Moliya"
         subtitle={data
-          ? `${data.totalExpenses} ta xarajat tahlil qilindi · FBS buyurtmalar ${data.fbsOrdersCount} ta × 1.5 = size ${data.requestedSize}`
-          : "Logistika va Jarimalar"}
+          ? `${data.totalExpenses} ta Uzum moliyaviy yozuvi tekshirildi`
+          : "Balans, jarayondagi tannarx va barcha ushlanmalar"}
         action={
           <button
-            onClick={() => { refresh(); refreshPw(); }}
-            disabled={isFetching || pwFetching}
+            onClick={() => { refresh(); refreshPw(); refreshPeriod(); }}
+            disabled={isFetching || pwFetching || periodFetching}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#0f0f16] border border-[#1c1c24] text-xs text-[#a1a1aa] hover:text-white hover:border-[#27272a] transition-all disabled:opacity-40"
           >
-            <RefreshCw className={cn("w-3.5 h-3.5", (isFetching || pwFetching) && "animate-spin")} />
-            <span className="hidden md:inline">{(isFetching || pwFetching) ? "Yangilanmoqda..." : "Yangilash"}</span>
+            <RefreshCw className={cn("w-3.5 h-3.5", (isFetching || pwFetching || periodFetching) && "animate-spin")} />
+            <span className="hidden md:inline">{(isFetching || pwFetching || periodFetching) ? "Yangilanmoqda..." : "Yangilash"}</span>
           </button>
         }
       />
-
-      {/* Bosh sahifadagi kabi: KPI + grafik + kategoriyalar + Harakatlar (davr filtri bilan) */}
-      <FinanceOverview />
 
       {/* First-time fetch banner */}
       {isFirstLoad && (
@@ -2112,7 +2594,7 @@ export default function FinancePage() {
             )}
           </div>
           <button
-            onClick={() => { refresh(); refreshPw(); }}
+            onClick={() => { refresh(); refreshPw(); refreshPeriod(); }}
             className="flex-shrink-0 px-3 py-1.5 rounded-lg bg-[#ef4444]/15 hover:bg-[#ef4444]/25 text-[#ef4444] text-xs font-semibold transition-colors"
           >
             Qayta urinish
@@ -2120,50 +2602,25 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* Net payout formula — the headline number, derived transparently */}
-      <PayoutFormulaCard
-        jamiTolanadi={jamiTolanadi}
-        jamiYechilgan={jamiYechilgan}
-        marketing={totalMarketing}
-        yechibOlingan={manualWithdrawnTotal}
-        qaytarilgan={totalRefunds}
-        loading={pwLoading || isLoading}
-      />
-
-      {/* Top: Jarayonda + To'langan + Jami to'lanadi (sellerProfit + logistika) */}
-      <ProcessingAndWithdrawCard
-        processingTotal={pwData?.processing.total ?? 0}
-        withdrawTotal={pwData?.withdraw.total ?? 0}
-        processingCount={pwData?.processing.count ?? 0}
-        withdrawCount={pwData?.withdraw.count ?? 0}
-        processingItems={pwData?.processing.itemsCount ?? 0}
-        withdrawItems={pwData?.withdraw.itemsCount ?? 0}
-        loading={pwLoading}
-      />
+      <FinanceAuditOverview data={pwData} expenses={data} usdRate={usdRate} loading={pwLoading || isLoading} />
 
       {/* Davr filtri — faqat Logistika va Jarimalar kartasiga ta'sir qiladi */}
       <LogFinesFilterBar value={logFilter} onChange={setLogFilter} />
 
-      {/* Big prominent card: Logistika + Jarimalar totals + Excel export */}
-      <LogisticsAndFinesCard
-        totalLogistics={lf.logisticsTotal}
-        totalFines={lf.finesTotal}
-        totalMarketing={lf.marketingTotal}
-        totalOther={lf.otherTotal}
-        totalRefunds={lf.refundsTotal}
-        logisticsCount={lf.logistics.length}
-        finesCount={lf.fines.length}
-        marketingCount={lf.marketing.length}
-        otherCount={lf.other.length}
-        refundsCount={lf.refunds.length}
-        loading={isLoading}
-        onExport={handleExport}
-        exportDisabled={!data || isLoading}
-        exporting={exporting}
-      />
+      <SmartupProfitSection period={periodData} usdRate={usdRate} loading={periodLoading || pwLoading || isLoading} />
 
-      {/* Manual withdrawals - Yechib olingan pullar */}
-      <ManualWithdrawalsSection onTotalChange={setManualWithdrawnTotal} />
+      <div className="flex justify-end">
+        <button onClick={handleExport} disabled={!data || isLoading || exporting} className="inline-flex items-center gap-2 rounded-xl bg-[#16a34a] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#15803d] disabled:cursor-not-allowed disabled:opacity-50">
+          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+          {exporting ? "Excel tayyorlanmoqda..." : "Tanlangan davrni Excelga yuklash"}
+        </button>
+      </div>
+
+      <ExpenseAuditLedger data={filteredExpenses} loading={isLoading} />
+
+      <ManualWithdrawalsDatabaseSection dateFrom={logFilter?.from} dateTo={logFilter?.to} />
+
+      <SupplierPaymentsSection dateFrom={logFilter?.from} dateTo={logFilter?.to} />
 
       {/* Boshqa moliya bo'limlari vaqtinchalik o'chirilgan — faqat Logistika + Jarimalar */}
     </div>

@@ -95,6 +95,35 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     return this.botUsername;
   }
 
+  /**
+   * Send a short-lived website login code to an already linked Telegram chat.
+   * The caller is responsible for generating, hashing and expiring the code;
+   * this method deliberately never logs it.
+   */
+  async sendLoginCode(
+    chatId: string,
+    code: string,
+    expiresAt: Date,
+  ): Promise<void> {
+    if (!this.bot) {
+      throw new Error('Telegram bot is not available');
+    }
+
+    const validForMinutes = Math.max(
+      1,
+      Math.ceil((expiresAt.getTime() - Date.now()) / 60_000),
+    );
+
+    await this.bot.telegram.sendMessage(
+      chatId,
+      `🔐 <b>Uzum Dashboard kirish kodi</b>\n\n` +
+        `<code>${code}</code>\n\n` +
+        `Kod ${validForMinutes} daqiqa amal qiladi. Uni hech kimga bermang.\n` +
+        `<i>Agar kodni siz so‘ramagan bo‘lsangiz, xabarni e’tiborsiz qoldiring.</i>`,
+      { parse_mode: 'HTML' },
+    );
+  }
+
   // ─── Admin startup ping ───────────────────────────────────────────────────
 
   private async notifyAdminStartup() {
@@ -200,8 +229,8 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   private async askPhone(ctx: Context) {
     await ctx.reply(
       '👋 <b>Uzum Dashboard botiga xush kelibsiz!</b>\n\n' +
-        'Kabinetingizga kirish uchun pastdagi tugma orqali telefon raqamingizni yuboring.\n\n' +
-        '<i>Eslatma: telefon raqamingiz saytdan ro\'yxatdan o\'tgan raqam bilan bir xil bo\'lishi kerak.</i>',
+        'Kirish yoki yangi akkaunt ochish uchun pastdagi tugma orqali o‘zingizning telefon raqamingizni yuboring.\n\n' +
+        '<i>Yangi raqam bo‘lsa, akkaunt va birinchi do‘kon avtomatik yaratiladi.</i>',
       {
         parse_mode: 'HTML',
         ...Markup.keyboard([
@@ -227,26 +256,54 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     }
 
     const phone = this.normalizePhone(String(contact.phone_number || ''));
-    const user = await this.findUserByPhone(phone);
-
+    let user = await this.findUserByPhone(phone);
+    let registered = false;
     if (!user) {
-      await ctx.reply(
-        `❌ <b>${escapeHtml(phone)}</b> raqami tizimda topilmadi.\n\n` +
-          'Avval saytdan ro\'yxatdan o\'ting, keyin shu botga qayta kiring.',
-        {
-          parse_mode: 'HTML',
-          link_preview_options: { is_disabled: true },
-          reply_markup: { remove_keyboard: true },
-        } as any,
-      );
+      const name = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' ')
+        || ctx.from?.username
+        || 'Telegram foydalanuvchi';
+      user = await this.prisma.user.create({
+        data: {
+          phone,
+          name,
+          isActive: true,
+          stores: { create: { name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' } },
+        },
+        select: { id: true, phone: true, name: true, isActive: true },
+      });
+      registered = true;
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'USER_REGISTERED',
+          userId: user.id,
+          entity: 'User',
+          entityId: user.id,
+          metadata: { via: 'telegram_bot', telegramId: String(ctx.from?.id ?? '') },
+        },
+      });
+    }
+    if (!user.isActive) {
+      await ctx.reply('⛔ Akkauntingiz bloklangan. Administrator bilan bog‘laning.', {
+        reply_markup: { remove_keyboard: true },
+      } as any);
       return;
     }
 
-    const chatId = String(ctx.chat?.id);
+    if (!registered && await this.prisma.store.count({ where: { userId: user.id } }) === 0) {
+      await this.prisma.store.create({
+        data: { userId: user.id, name: "Mening do'konim", plan: 'FREE', status: 'ACTIVE' },
+      });
+    }
+
+    const chatId = String(ctx.from?.id ?? ctx.chat?.id);
     const isNew = !(await this.prisma.telegramUser.findUnique({
       where: { userId: user.id },
     }));
 
+    // One Telegram identity must never point to two dashboard accounts.
+    await this.prisma.telegramUser.deleteMany({
+      where: { chatId, NOT: { userId: user.id } },
+    });
     await this.prisma.telegramUser.upsert({
       where: { userId: user.id },
       create: {
@@ -267,7 +324,9 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
       },
     });
 
-    const greeting = isNew
+    const greeting = registered
+      ? `✅ <b>Akkauntingiz yaratildi${user.name ? ', ' + escapeHtml(user.name) : ''}!</b>`
+      : isNew
       ? `✅ <b>Xush kelibsiz${user.name ? ', ' + escapeHtml(user.name) : ''}!</b>`
       : `✅ <b>Qaytib kelganingizdan xursandmiz${user.name ? ', ' + escapeHtml(user.name) : ''}!</b>`;
 
@@ -731,7 +790,10 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   private mainMenu(notifyOrders: boolean, active?: StatsRange) {
     const mark = (r: StatsRange, label: string) =>
       active === r ? `· ${label} ·` : label;
-    return Markup.inlineKeyboard([
+    const rows: any[][] = [];
+    const webAppUrl = this.telegramWebAppUrl();
+    if (webAppUrl) rows.push([Markup.button.webApp('🌐 Dashboardni ochish', webAppUrl)]);
+    rows.push(
       [
         Markup.button.callback(mark('today', '📊 Bugun'), 'stats:today'),
         Markup.button.callback(mark('week', '📈 Hafta'), 'stats:week'),
@@ -751,7 +813,8 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
         ),
       ],
       [Markup.button.callback('ℹ️ Yordam', 'help')],
-    ]);
+    );
+    return Markup.inlineKeyboard(rows);
   }
 
   private backMenu() {
@@ -858,7 +921,7 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
   }
 
   private async findTelegramUser(ctx: Context) {
-    const chatId = String(ctx.chat?.id);
+    const chatId = String(ctx.from?.id ?? ctx.chat?.id);
     return this.prisma.telegramUser.findFirst({
       where: { chatId, isActive: true },
     });
@@ -870,8 +933,13 @@ export class TelegramBotService implements OnModuleInit, OnApplicationShutdown {
     );
     return this.prisma.user.findFirst({
       where: { phone: { in: candidates } },
-      select: { id: true, phone: true, name: true },
+      select: { id: true, phone: true, name: true, isActive: true },
     });
+  }
+
+  private telegramWebAppUrl(): string | null {
+    const value = this.config.get<string>('TELEGRAM_WEBAPP_URL')?.trim();
+    return value && /^https:\/\//i.test(value) ? value : null;
   }
 
   private normalizePhone(raw: string): string {

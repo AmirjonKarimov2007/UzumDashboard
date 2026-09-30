@@ -256,6 +256,8 @@ export async function printQrLabels(
       }
       done++;
       onProgress?.(done, totalLabels);
+      // Let progress paint during large print jobs instead of freezing the UI.
+      if (done % 20 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
 

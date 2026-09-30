@@ -242,11 +242,12 @@ export class UzumApiClient {
     endpoint: string,
     method: string,
     fn: (client: AxiosInstance) => Promise<AxiosResponse<T>>,
+    attempts = this.maxRetries,
   ): Promise<T> {
     const client = this.buildClient(apiKey);
     let lastError: Error | undefined;
 
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const start = Date.now();
       try {
         const response = await fn(client);
@@ -318,7 +319,7 @@ export class UzumApiClient {
           // cap the wait and only sleep if we still have an attempt left. After the
           // attempts run out we fail fast — SWR cache / a quick retry serve instead.
           lastError = axiosErr;
-          if (attempt < this.maxRetries) {
+          if (attempt < attempts) {
             const retryAfter = parseInt(axiosErr.response?.headers['retry-after'] || '0', 10);
             const waitMs = Math.min(Math.max(retryAfter, 1), 6) * 1000;
             this.logger.warn(`Rate limited on attempt ${attempt}. Waiting ${waitMs}ms (capped)`);
@@ -329,7 +330,7 @@ export class UzumApiClient {
 
         lastError = axiosErr;
 
-        if (attempt < this.maxRetries) {
+        if (attempt < attempts) {
           const delay = this.retryDelay * Math.pow(2, attempt - 1);
           this.logger.warn(`Attempt ${attempt} failed for ${endpoint}. Retrying in ${delay}ms`);
           await this.sleep(delay);
@@ -338,7 +339,7 @@ export class UzumApiClient {
     }
 
     const errMsg = lastError?.message || `rate-limited or unreachable for ${endpoint}`;
-    throw new ServiceUnavailableException(`Uzum API unavailable after ${this.maxRetries} attempts: ${errMsg}`);
+    throw new ServiceUnavailableException(`Uzum API unavailable after ${attempts} attempts: ${errMsg}`);
   }
 
   // ─── Shops ────────────────────────────────────────────────────────────────
@@ -371,7 +372,8 @@ export class UzumApiClient {
       searchQuery?: string;
     } = {},
   ): Promise<{ products: any[]; total: number }> {
-    const { page = 0, size = 50, filter = 'ALL', sortBy = 'DEFAULT', order = 'DESC', searchQuery } = params;
+    const { page = 0, size = 50, filter = 'ALL', sortBy = 'CREATED_AND_TITLE', order = 'DESC', searchQuery } = params;
+    const normalizedOrder = String(order || 'DESC').toUpperCase();
 
     const data = await this.executeWithRetry<{ productList: any[]; totalProductsAmount: number }>(
       storeId,
@@ -380,7 +382,7 @@ export class UzumApiClient {
       'GET',
       (client) =>
         client.get(`/v1/product/shop/${shopId}`, {
-          params: { page, size, filter, sortBy, order, ...(searchQuery ? { searchQuery } : {}) },
+          params: { page, size, filter, sortBy, order: normalizedOrder, ...(searchQuery ? { searchQuery } : {}) },
         }),
     );
     return {
@@ -394,7 +396,9 @@ export class UzumApiClient {
     apiKey: string,
     shopId: string | number,
   ): Promise<any[]> {
-    const pageSize = 50;
+    // Uzum accepts large product pages. One request covers ordinary shops and
+    // greatly reduces rate-limit pressure compared with the previous 50/page.
+    const pageSize = 2000;
     const firstPage = await this.getProducts(storeId, apiKey, shopId, { page: 0, size: pageSize });
     if (firstPage.products.length === 0) return [];
 
@@ -402,7 +406,7 @@ export class UzumApiClient {
     const allProducts = [...firstPage.products];
 
     for (let p = 1; p < totalPages; p++) {
-      await this.sleep(200);
+      await this.sleep(150);
       const pageData = await this.getProducts(storeId, apiKey, shopId, { page: p, size: pageSize });
       if (pageData.products.length === 0) break;
       allProducts.push(...pageData.products);
@@ -521,13 +525,18 @@ export class UzumApiClient {
     apiKey: string,
     orderId: string,
   ): Promise<UzumOrder> {
-    return this.executeWithRetry<UzumOrder>(
+    const data = await this.executeWithRetry<UzumOrder | { payload: UzumOrder }>(
       storeId,
       apiKey,
       `/v1/fbs/order/${orderId}`,
       'GET',
       (client) => client.get(`/v1/fbs/order/${orderId}`),
     );
+    // Unlike the v2 list endpoint, the v1 single-order endpoint wraps the
+    // actual order in `{ payload }`. Normalising it here gives every caller the
+    // same order shape and, crucially, exposes the authoritative
+    // `status`/`invoiceNumber` pair used by Smartup supply reconciliation.
+    return (data as any)?.payload || data as UzumOrder;
   }
 
   // ─── Finance ──────────────────────────────────────────────────────────────
@@ -578,16 +587,23 @@ export class UzumApiClient {
     const pageSize = 50;
     const allOrders: any[] = [];
     let page = 0;
+    let hasMore = true;
 
-    while (true) {
+    while (hasMore) {
       await this.sleep(150);
       const { orderItems } = await this.getFinanceOrders(storeId, apiKey, shopIds, {
         page, size: pageSize, dateFrom, dateTo,
       });
-      if (orderItems.length === 0) break;
+      if (orderItems.length === 0) {
+        hasMore = false;
+        continue;
+      }
       allOrders.push(...orderItems);
-      if (orderItems.length < pageSize) break;
-      page++;
+      if (orderItems.length < pageSize) {
+        hasMore = false;
+      } else {
+        page++;
+      }
     }
 
     return allOrders;
@@ -659,10 +675,12 @@ export class UzumApiClient {
     shopIds: (string | number)[],
     dateFrom?: number,
     dateTo?: number,
+    strict = false,
   ): Promise<any[]> {
     const pageSize = 100;
     const all: any[] = [];
     let page = 0;
+    let fetchedPages = 0;
     let totalElements = Infinity;
 
     while (all.length < totalElements) {
@@ -672,6 +690,7 @@ export class UzumApiClient {
         const { payments, totalElements: t } = await this.getExpenses(storeId, apiKey, shopIds, {
           page, size: pageSize, dateFrom, dateTo,
         });
+        fetchedPages++;
         if (t > 0) totalElements = t;
         if (payments.length === 0) break;
         all.push(...payments);
@@ -680,6 +699,7 @@ export class UzumApiClient {
         if (payments.length < pageSize && totalElements === Infinity) break;
         page++;
       } catch (err: any) {
+        if (strict) throw err;
         this.logger.warn(
           `getAllExpenses page ${page} failed (${err?.message || err}); returning ${all.length} items collected so far`,
         );
@@ -688,7 +708,7 @@ export class UzumApiClient {
     }
 
     this.logger.log(
-      `getAllExpenses: fetched ${all.length}/${totalElements === Infinity ? '?' : totalElements} items across ${page + 1} pages`,
+      `getAllExpenses: fetched ${all.length}/${totalElements === Infinity ? '?' : totalElements} items across ${fetchedPages} pages`,
     );
     return all;
   }
@@ -769,15 +789,21 @@ export class UzumApiClient {
   ): Promise<{ orders: any[]; totalAmount?: number }> {
     const params: Record<string, unknown> = { shopIds: shopId, status, page, size };
     if (extra.scheme) params.scheme = extra.scheme;
-    if (extra.dateFrom) params.dateFrom = extra.dateFrom;
-    if (extra.dateTo) params.dateTo = extra.dateTo;
+    // `/v2/fbs/orders` expects epoch seconds. Invoice timestamps are epoch
+    // milliseconds; sending them unchanged returns HTTP 200 with an empty list,
+    // which made accepted supplies appear as 0/N during Smartup import.
+    const dateFrom = this.toEpochSeconds(extra.dateFrom);
+    const dateTo = this.toEpochSeconds(extra.dateTo);
+    if (dateFrom != null) params.dateFrom = dateFrom;
+    if (dateTo != null) params.dateTo = dateTo;
 
     const data = await this.executeWithRetry<{ payload: { orders: any[]; totalAmount?: number } }>(
       storeId,
       apiKey,
       '/v2/fbs/orders',
       'GET',
-      (client) => client.get('/v2/fbs/orders', { params }),
+      (client) => client.get('/v2/fbs/orders', { params, timeout: 10_000 }),
+      2,
     );
     return {
       orders: data?.payload?.orders || [],
@@ -797,7 +823,8 @@ export class UzumApiClient {
     for (const status of statuses) {
       let page = 0;
       const pageSize = 50;
-      while (true) {
+      let hasMore = true;
+      while (hasMore) {
         try {
           await this.sleep(150);
           const { orders } = await this.getFbsOrders(
@@ -809,13 +836,19 @@ export class UzumApiClient {
             pageSize,
             { dateFrom, dateTo },
           );
-          if (orders.length === 0) break;
+          if (orders.length === 0) {
+            hasMore = false;
+            continue;
+          }
           all.push(...orders);
-          if (orders.length < pageSize) break;
-          page++;
+          if (orders.length < pageSize) {
+            hasMore = false;
+          } else {
+            page++;
+          }
         } catch (err) {
           this.logger.warn(`FBS status=${status} page=${page} failed: ${(err as Error).message}`);
-          break;
+          hasMore = false;
         }
       }
     }
@@ -896,7 +929,7 @@ export class UzumApiClient {
     qs.push(`size=${safeSize}`);
     const url = `/v1/fbs/invoice?${qs.join('&')}`;
 
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const response = await client.get(url, { timeout: 12_000 });
         return { invoices: response.data?.payload || [] };
@@ -905,13 +938,13 @@ export class UzumApiClient {
         const body = err?.response?.data;
         // Uzum sporadically returns 400 "Bad request" for valid requests when load is high
         const retryable = code === 429 || code === 503 || code === 400 || code === 502 || code === 504;
-        if (retryable && attempt < 4) {
+        if (retryable && attempt < 2) {
           this.logger.warn(`getFbsInvoices ${code} — retry ${attempt}/3 in ${attempt * 1000}ms`);
           await this.sleep(attempt * 1000);
           continue;
         }
         this.logger.warn(`getFbsInvoices final fail (code=${code}): ${JSON.stringify(body)?.slice(0, 200)}`);
-        return { invoices: [] };
+        throw new ServiceUnavailableException('Uzum ta’minlashlarini olib bo‘lmadi. Qayta urinib ko‘ring.');
       }
     }
     return { invoices: [] };
@@ -961,7 +994,7 @@ export class UzumApiClient {
     size: 'LARGE' | 'SMALL' = 'LARGE',
   ): Promise<string | null> {
     const client = this.buildClient(apiKey);
-    const backoffMs = [0, 1000, 2500]; // 3 attempts total
+    const backoffMs = [0, 1000]; // At most two attempts; the batch layer must not retry again.
     for (let attempt = 0; attempt < backoffMs.length; attempt++) {
       if (backoffMs[attempt] > 0) await this.sleep(backoffMs[attempt]);
       try {
@@ -1237,20 +1270,45 @@ export class UzumApiClient {
   async getSellerInvoices(
     storeId: string,
     apiKey: string,
+    shopId: string | number,
     params: { page?: number; size?: number } = {},
   ): Promise<any[]> {
     const { page = 0, size = 50 } = params;
-    const url = `/v1/invoice?page=${page}&size=${Math.min(size, 50)}`;
-    try {
-      const data = await this.executeWithRetry<{ payload: any[] }>(
-        storeId, apiKey, '/v1/invoice', 'GET',
-        (client) => client.get(url),
-      );
-      return data?.payload || [];
-    } catch (err: any) {
-      this.logger.warn(`getSellerInvoices failed: ${err?.message}`);
-      return [];
+    const endpoint = `/v1/shop/${encodeURIComponent(String(shopId))}/invoice`;
+    const data = await this.executeWithRetry<any>(
+      storeId,
+      apiKey,
+      endpoint,
+      'GET',
+      (client) => client.get(endpoint, { params: { page, size: Math.min(Math.max(size, 1), 50) } }),
+    );
+    return this.asArray(data, ['payload', 'invoices', 'content']);
+  }
+
+  /** Products and SKU quantities contained in one FBO supply invoice. */
+  async getSellerInvoiceProducts(
+    storeId: string,
+    apiKey: string,
+    shopId: string | number,
+    invoiceId: string | number,
+  ): Promise<any[]> {
+    const endpoint = `/v1/shop/${encodeURIComponent(String(shopId))}/invoice/products`;
+    const data = await this.executeWithRetry<any>(
+      storeId,
+      apiKey,
+      endpoint,
+      'GET',
+      (client) => client.get(endpoint, { params: { invoiceId } }),
+    );
+    return this.asArray(data, ['payload', 'products', 'content']);
+  }
+
+  private asArray(data: any, wrapperKeys: string[]): any[] {
+    if (Array.isArray(data)) return data;
+    for (const key of wrapperKeys) {
+      if (Array.isArray(data?.[key])) return data[key];
     }
+    return [];
   }
 
   // ─── Stocks (v3 paginated) ──────────────────────────────────────────────

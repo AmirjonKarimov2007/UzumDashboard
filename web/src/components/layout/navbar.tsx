@@ -21,6 +21,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useMe, useUpdateUsdRate } from "@/hooks/use-users";
 
 const pageLabels: Record<string, { title: string; subtitle: string }> = {
+  "/super-admin": { title: "Super-admin", subtitle: "Foydalanuvchilar va do‘konlar" },
   "/dashboard": { title: "Bosh sahifa", subtitle: "Savdo ko'rsatkichlari" },
   "/analytics": { title: "Analitika", subtitle: "Chuqur tahlil va statistika" },
   "/products": { title: "Mahsulotlar", subtitle: "Katalog boshqaruvi" },
@@ -28,7 +29,7 @@ const pageLabels: Record<string, { title: string; subtitle: string }> = {
   "/finance": { title: "Moliya", subtitle: "Daromad va xarajatlar" },
   "/inventory": { title: "Inventar", subtitle: "Ombor holati" },
   "/notifications": { title: "Bildirishnomalar", subtitle: "Ogohlantirish va yangiliklar" },
-  "/ai": { title: "AI Tahlil", subtitle: "Aqlli tavsiyalar" },
+  "/supplies": { title: "Ta’minlashlar", subtitle: "FBS ta’minlashlar va Smartup importi" },
   "/team": { title: "Jamoa", subtitle: "Foydalanuvchilar boshqaruvi" },
   "/reports": { title: "Hisobotlar", subtitle: "Eksport va tahlil" },
   "/settings": { title: "Sozlamalar", subtitle: "Profil va tizim sozlamalari" },
@@ -74,18 +75,18 @@ export function Navbar() {
   return (
     <header
       className={cn(
-        "fixed top-0 right-0 h-14 z-20 transition-all duration-300 ease-out",
-        sidebarCollapsed ? "left-0" : "left-[248px]",
-        "glass border-b border-[#18181b]"
+        "dashboard-topbar fixed right-0 top-0 z-20 h-[72px] transition-[left] duration-200 ease-out",
+        sidebarCollapsed ? "left-0" : "left-[272px]"
       )}
     >
-      <div className="h-full flex items-center justify-between px-4 lg:px-6 gap-4">
+      <div className="flex h-full items-center justify-between gap-2 px-3 sm:gap-4 sm:px-5 lg:px-7">
         {/* Left */}
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Mobile hamburger */}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="lg:hidden p-2 -ml-1 rounded-lg hover:bg-[#0f0f16] text-[#71717a] hover:text-white transition-colors"
+            className="icon-button -ml-1 lg:hidden"
+            aria-label="Menyuni ochish"
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -93,24 +94,25 @@ export function Navbar() {
           {/* Desktop toggle */}
           <button
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="hidden lg:flex p-2 -ml-1 rounded-lg hover:bg-[#0f0f16] text-[#71717a] hover:text-white transition-colors"
+            className="icon-button -ml-1 hidden lg:flex"
+            aria-label={sidebarCollapsed ? "Yon panelni ochish" : "Yon panelni yopish"}
           >
             <Menu className="w-4 h-4" />
           </button>
 
           {/* Page title */}
-          <div className="hidden sm:block">
-            <h1 className="text-sm font-semibold text-white leading-none">{page.title}</h1>
-            <p className="text-[11px] text-[#52525b] mt-0.5">{page.subtitle}</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-bold leading-none text-[var(--text-primary)] sm:text-[15px]">{page.title}</h1>
+            <p className="mt-1 hidden truncate text-[11px] text-[var(--text-muted)] sm:block">{page.subtitle}</p>
           </div>
         </div>
 
         {/* Right */}
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
           {/* Search / Command palette trigger */}
           <button
             onClick={() => setCommandPaletteOpen(true)}
-            className="hidden md:flex items-center gap-2 px-3 h-8 rounded-lg bg-[#18181b] border border-[#27272a] text-[#52525b] hover:text-[#a1a1aa] hover:border-[#3f3f46] transition-all text-xs"
+            className="topbar-search hidden h-9 items-center gap-2 px-3 text-xs md:flex"
           >
             <Search className="w-3.5 h-3.5" />
             <span>Qidirish...</span>
@@ -124,13 +126,14 @@ export function Navbar() {
           {/* Mobile search */}
           <button
             onClick={() => setCommandPaletteOpen(true)}
-            className="md:hidden p-2 rounded-lg hover:bg-[#0f0f16] text-[#71717a] hover:text-white transition-colors"
+            className="icon-button md:hidden"
+            aria-label="Qidiruvni ochish"
           >
             <Search className="w-4.5 h-4.5" />
           </button>
 
           {/* USD rate (editable): 1$ = N so'm */}
-          <div className="hidden lg:flex items-center gap-1.5 px-2.5 h-8 rounded-lg bg-[#18181b] border border-[#27272a]">
+          <div className="topbar-control hidden h-9 items-center gap-1.5 px-2.5 lg:flex">
             <DollarSign className="w-3.5 h-3.5 text-[#10b981]" />
             <span className="text-[11px] text-[#52525b]">1$ =</span>
             <input
@@ -150,7 +153,7 @@ export function Navbar() {
           </div>
 
           {/* Display currency toggle: UZS / USD */}
-          <div className="hidden sm:flex items-center rounded-lg bg-[#18181b] border border-[#27272a] p-0.5">
+          <div className="topbar-control hidden items-center p-0.5 sm:flex">
             {(["UZS", "USD"] as const).map((c) => (
               <button
                 key={c}
@@ -172,7 +175,7 @@ export function Navbar() {
             onClick={toggleTheme}
             aria-label={theme === "dark" ? "Yorug' rejimga o'tish" : "Qorong'i rejimga o'tish"}
             title={theme === "dark" ? "Yorug' rejim" : "Qorong'i rejim"}
-            className="relative p-2 rounded-lg text-[#71717a] hover:bg-[#0f0f16] hover:text-white transition-colors"
+            className="icon-button relative"
           >
             <AnimatePresence mode="wait" initial={false}>
               {theme === "dark" ? (
@@ -207,8 +210,10 @@ export function Navbar() {
               onClick={() => { setNotifOpen(!notifOpen); setProfileOpen(false); }}
               className={cn(
                 "relative p-2 rounded-lg transition-colors",
-                notifOpen ? "bg-[#0f0f16] text-white" : "text-[#71717a] hover:bg-[#0f0f16] hover:text-white"
+                "icon-button",
+                notifOpen && "is-active"
               )}
+              aria-label="Bildirishnomalar"
             >
               <Bell className="w-4 h-4" />
               {unreadCount > 0 && (
@@ -223,7 +228,7 @@ export function Navbar() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 6, scale: 0.97 }}
                   transition={{ duration: 0.15 }}
-                  className="absolute right-0 top-11 w-[360px] rounded-xl bg-[#0f0f16] border border-[#27272a] shadow-elevated z-50 overflow-hidden"
+                  className="floating-panel absolute right-0 top-12 z-50 w-[min(360px,calc(100vw-24px))] overflow-hidden"
                 >
                   <div className="flex items-center justify-between px-4 py-3 border-b border-[#18181b]">
                     <div className="flex items-center gap-2">
@@ -268,7 +273,8 @@ export function Navbar() {
           <div className="relative">
             <button
               onClick={() => { setProfileOpen(!profileOpen); setNotifOpen(false); }}
-              className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg hover:bg-[#0f0f16] transition-colors group"
+              className="profile-trigger group flex items-center gap-2 py-1 pl-1 pr-1.5"
+              aria-label="Profil menyusi"
             >
               <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] flex items-center justify-center text-xs font-semibold text-white">
                 {user?.name?.slice(0, 2).toUpperCase() || "U"}
@@ -283,7 +289,7 @@ export function Navbar() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 6, scale: 0.97 }}
                   transition={{ duration: 0.15 }}
-                  className="absolute right-0 top-11 w-56 rounded-xl bg-[#0f0f16] border border-[#27272a] shadow-elevated z-50 overflow-hidden py-1"
+                  className="floating-panel absolute right-0 top-12 z-50 w-56 overflow-hidden py-1"
                 >
                   <div className="px-4 py-3 border-b border-[#18181b]">
                     <p className="text-sm font-medium text-white">{user?.name || "Foydalanuvchi"}</p>

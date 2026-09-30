@@ -73,7 +73,15 @@ export function useSetFbsStocks() {
   const storeId = useActiveStoreId();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (updates: Array<{ skuId: number; amount: number }>) => {
+    mutationFn: async (updates: Array<{
+      skuId: number;
+      amount: number;
+      barcode?: string;
+      fbsLinked?: boolean;
+      fbsAllowed?: boolean;
+      dbsLinked?: boolean;
+      dbsAllowed?: boolean;
+    }>) => {
       const { data } = await apiClient.post(
         `/marketplace/stores/${storeId}/fbs/stocks`,
         { updates },

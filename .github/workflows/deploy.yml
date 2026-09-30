@@ -14,7 +14,7 @@
 #      DEPLOY_DIR            = serverdagi klon yo'li (mas: /home/user/UzumDashboard)
 #      NEXT_PUBLIC_API_URL   = public API manzili (mas: https://api.sizningdomen.uz)
 #
-# Shundan keyin har push avtomatik: git pull → build → migrate → pm2 reload.
+# Shundan keyin har push avtomatik: fast-forward → build → migrate → target PM2 reload.
 
 name: Deploy
 
@@ -43,23 +43,33 @@ jobs:
           echo "▶ Deploy: $DIR"
           cd "$DIR"
 
-          # Eng so'nggi kodni olish (lokal o'zgarishlarni bekor qiladi)
-          git fetch --all --prune
-          git reset --hard origin/master
+          # Serverdagi qo'lda kiritilgan o'zgarish yo'qolmasin: avval recoverable
+          # stash yaratiladi, so'ng faqat fast-forward yangilanishga ruxsat beriladi.
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git stash push --include-untracked -m "actions-before-deploy-$(date +%Y%m%d%H%M%S)"
+          fi
+          git fetch origin master --prune
+          git checkout master
+          git merge --ff-only origin/master
 
-          # Backend: bog'liqliklar, prisma, migratsiya, build
+          # Buildlar ketma-ket va past CPU prioritetida ishlaydi.
           ( cd services/auth \
-              && npm ci \
-              && npx prisma generate \
-              && npx prisma migrate deploy \
-              && npm run build )
+              && nice -n 10 npm ci --prefer-offline --no-audit --no-fund \
+              && nice -n 10 npx prisma generate \
+              && nice -n 10 npm run build )
 
-          # Frontend: bog'liqliklar va build (NEXT_PUBLIC_* build paytida inline bo'ladi)
+          # Frontend (NEXT_PUBLIC_* build paytida inline bo'ladi)
           ( cd web \
-              && npm ci \
-              && npm run build )
+              && nice -n 10 npm ci --prefer-offline --no-audit --no-fund \
+              && nice -n 10 npm run build )
 
-          # PM2 bilan qayta ishga tushirish (reload = uzilishsiz; bo'lmasa start)
-          pm2 reload ecosystem.config.js --update-env || pm2 start ecosystem.config.js
+          # Buildlar o'tgandan keyingina migratsiya va faqat Uzum jarayonlari reload qilinadi.
+          ( cd services/auth && npx prisma migrate deploy )
+          pm2 reload uzum-auth --update-env || pm2 start ecosystem.config.js --only uzum-auth
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3003/health >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3003/health >/dev/null
+          pm2 reload uzum-web --update-env || pm2 start ecosystem.config.js --only uzum-web
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:3002/products >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:3002/products >/dev/null
           pm2 save
           echo "✅ Deploy tugadi"

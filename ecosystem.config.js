@@ -12,7 +12,8 @@
  *   pm2 start ecosystem.config.js
  *   pm2 save                 # persist the process list
  *   pm2 logs                 # tail all logs
- *   pm2 restart all          # after deploying a new build
+ *   pm2 reload uzum-auth --update-env
+ *   pm2 reload uzum-web --update-env
  *
  * Survive reboot (once, as admin):
  *   pm2 startup    # follow the printed instructions, then: pm2 save

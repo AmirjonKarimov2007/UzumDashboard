@@ -1,38 +1,66 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/stores/auth-store";
-import { ShieldCheck, Smartphone, ArrowRight, CheckCircle2, Loader2, RefreshCw, Send } from "lucide-react";
+import {
+  ArrowLeft, ArrowRight, CheckCircle2, Clock3, KeyRound, Loader2,
+  LockKeyhole, MessageCircleMore, RefreshCw, Send, ShieldCheck, Smartphone,
+} from "lucide-react";
 import axios from "axios";
+import { useAuthStore } from "@/stores/auth-store";
+import { apiClient } from "@/lib/api/client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
-/** Telegram WebApp obyektini biroz kutib oladi (SDK keyinroq yuklanishi mumkin). */
+function apiMessage(error: unknown, fallback: string) {
+  if (!axios.isAxiosError(error)) return fallback;
+  const message = error.response?.data?.message;
+  return Array.isArray(message) ? message[0] || fallback : message || fallback;
+}
+
+function formatPhone(value: string) {
+  let digits = value.replace(/\D/g, "");
+  if (!digits.startsWith("998")) digits = digits.length <= 9 ? `998${digits}` : digits;
+  digits = digits.slice(0, 12);
+  const local = digits.slice(3);
+  return `+998${local ? ` ${local.slice(0, 2)}` : ""}${local.length > 2 ? ` ${local.slice(2, 5)}` : ""}${local.length > 5 ? ` ${local.slice(5, 7)}` : ""}${local.length > 7 ? ` ${local.slice(7, 9)}` : ""}`;
+}
+
 async function getTelegramInitData(timeoutMs = 3000): Promise<string | null> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const tg = (window as any).Telegram?.WebApp;
-    if (tg && typeof tg.initData === "string") {
-      return tg.initData && tg.platform !== "unknown" ? tg.initData : null;
+    const telegram = (window as any).Telegram?.WebApp;
+    if (telegram && typeof telegram.initData === "string") {
+      return telegram.initData && telegram.platform !== "unknown" ? telegram.initData : null;
     }
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
   }
   return null;
 }
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setUser, setTokens } = useAuthStore();
-
-  const [phone, setPhone] = useState("");
-  const [code, setCode] = useState("");
+  const setUser = useAuthStore((state) => state.setUser);
+  const setTokens = useAuthStore((state) => state.setTokens);
+  const logout = useAuthStore((state) => state.logout);
+  const stopImpersonation = useAuthStore((state) => state.stopImpersonation);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const refreshToken = useAuthStore((state) => state.refreshToken);
+  const adminSession = useAuthStore((state) => state.adminSession);
+  const hasHydrated = useAuthStore((state) => state._hasHydrated);
+  const codeInput = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<"phone" | "code">("phone");
+  const [phone, setPhone] = useState("+998 ");
+  const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [codeSent, setCodeSent] = useState(false);
-  const [resendTimer, setResendTimer] = useState(0);
+  const [notice, setNotice] = useState("");
   const [devCode, setDevCode] = useState<string | null>(null);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [checkingStoredSession, setCheckingStoredSession] = useState(true);
+  const [sessionRestoreError, setSessionRestoreError] = useState("");
+  const [sessionRetry, setSessionRetry] = useState(0);
 
   // Telegram WebApp avto-login holati. Telegram ichida ochilgan bo'lsa, darhol
   // "checking" bilan boshlaymiz — telefon formasi bir lahza ko'rinib ketmasligi uchun.
@@ -45,8 +73,60 @@ export default function LoginPage() {
   });
   const tgInitData = useRef<string | null>(null);
   const tgTried = useRef(false);
+  const digits = phone.replace(/\D/g, "");
+  const normalizedPhone = `+${digits}`;
+  const phoneIsValid = /^998\d{9}$/.test(digits);
 
-  // Login javobini qo'llab, dashboard'ga o'tkazadi
+  useEffect(() => {
+    if (!hasHydrated) return;
+    if (!isAuthenticated) {
+      setCheckingStoredSession(false);
+      return;
+    }
+    if (!accessToken && !refreshToken) {
+      logout();
+      setCheckingStoredSession(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingStoredSession(true);
+    setSessionRestoreError("");
+    const restoreSession = async () => {
+      try {
+        // apiClient automatically rotates an expired access token with the
+        // long-lived refresh token, then retries this validation request.
+        await apiClient.post('/auth/validate');
+        if (!cancelled) router.replace('/dashboard');
+      } catch (restoreError) {
+        if (cancelled) return;
+        const rejected = axios.isAxiosError(restoreError)
+          && [401, 403].includes(restoreError.response?.status || 0);
+        if (adminSession && rejected) {
+          // An expired impersonation token must not discard the administrator's
+          // original session. Restore it and let this effect validate it again.
+          stopImpersonation();
+          return;
+        }
+        if (rejected) logout();
+        else setSessionRestoreError("Sessiyani tekshirib bo‘lmadi. Internet yoki server bilan ulanishni tekshiring. Saqlangan sessiyangiz o‘chirilmadi.");
+        setCheckingStoredSession(false);
+      }
+    };
+    void restoreSession();
+    return () => { cancelled = true; };
+  }, [accessToken, adminSession, hasHydrated, isAuthenticated, logout, refreshToken, router, stopImpersonation, sessionRetry]);
+
+  useEffect(() => {
+    if (!resendTimer) return;
+    const timer = window.setInterval(() => setResendTimer((value) => Math.max(0, value - 1)), 1000);
+    return () => window.clearInterval(timer);
+  }, [resendTimer]);
+
+  useEffect(() => {
+    if (step === "code") codeInput.current?.focus();
+  }, [step]);
+
   const applyLogin = useCallback((data: any) => {
     setTokens(data.accessToken, data.refreshToken);
     setUser({
@@ -55,11 +135,11 @@ export default function LoginPage() {
       email: data.user.email ?? undefined,
       name: data.user.name ?? undefined,
       avatar: data.user.avatar ?? undefined,
-      stores: (data.user.stores ?? []).map((s: any) => ({
-        id: s.id, name: s.name, domain: s.domain ?? undefined, plan: s.plan ?? undefined,
+      stores: (data.user.stores ?? []).map((store: any) => ({
+        id: store.id, name: store.name, domain: store.domain ?? undefined, plan: store.plan ?? undefined,
       })),
     });
-    router.push("/dashboard");
+    router.replace("/dashboard");
   }, [router, setTokens, setUser]);
 
   const tryTelegramLogin = useCallback(async (initData: string): Promise<"ok" | "not-linked" | "error"> => {
@@ -67,381 +147,222 @@ export default function LoginPage() {
       const { data } = await axios.post(`${API_URL}/auth/telegram`, { initData });
       applyLogin(data);
       return "ok";
-    } catch (err: any) {
-      const msg = err?.response?.data?.message;
-      if (err?.response?.status === 404 || msg === "telegram_not_linked") return "not-linked";
-      return "error";
+    } catch (requestError) {
+      if (!axios.isAxiosError(requestError)) return "error";
+      const message = requestError.response?.data?.message;
+      return requestError.response?.status === 404 || message === "telegram_not_linked" ? "not-linked" : "error";
     }
   }, [applyLogin]);
 
-  // Telegram WebApp ichida ochilsa — parol so'ramasdan avtomatik kirishga urinamiz
   useEffect(() => {
     if (tgTried.current) return;
     tgTried.current = true;
-    (async () => {
+    void (async () => {
       const initData = await getTelegramInitData();
-      if (!initData) return; // oddiy brauzer — odatdagi login
+      if (!initData) return;
       tgInitData.current = initData;
       setTgPhase("checking");
-      const res = await tryTelegramLogin(initData);
-      if (res === "ok") return; // redirect bo'ldi
-      setTgPhase("not-linked"); // telefon ulanmagan yoki xato — kontakt so'raymiz
+      const result = await tryTelegramLogin(initData);
+      if (result !== "ok") setTgPhase("not-linked");
     })();
   }, [tryTelegramLogin]);
 
-  // Telegram'da kontakt (telefon) ulashishni so'raydi, keyin qayta urinadi
   const shareContactAndRetry = useCallback(() => {
-    const tg = (window as any).Telegram?.WebApp;
-    if (!tg?.requestContact) {
-      setError("Telegram versiyangiz kontakt ulashni qo'llab-quvvatlamaydi. Botga /start yuborib telefon raqamni ulashing.");
+    const telegram = (window as any).Telegram?.WebApp;
+    if (!telegram?.requestContact) {
+      setError("Telegram versiyangiz kontakt ulashni qo‘llab-quvvatlamaydi. Botga /start yuborib telefon raqamingizni ulang.");
       return;
     }
     setLoading(true);
-    tg.requestContact(async (ok: any) => {
-      const granted = ok === true || ok?.status === "sent" || ok?.status === "allowed";
-      if (!granted) { setLoading(false); return; }
-      // Bot kontaktni qabul qilib bog'lashi uchun bir necha marta qayta urinamiz
-      for (let i = 0; i < 5; i++) {
-        await new Promise((r) => setTimeout(r, 1200));
-        const res = await tryTelegramLogin(tgInitData.current || "");
-        if (res === "ok") return;
+    telegram.requestContact(async (response: unknown) => {
+      const result = response as { status?: string } | boolean;
+      const granted = result === true || (typeof result === "object" && ["sent", "allowed"].includes(result?.status || ""));
+      if (!granted) {
+        setLoading(false);
+        return;
+      }
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        if (await tryTelegramLogin(tgInitData.current || "") === "ok") return;
       }
       setLoading(false);
-      setError("Telefon ulandi, lekin kirish hali tayyor emas. Yana bir marta urinib ko'ring.");
+      setError("Telefon ulandi, lekin kirish hali tayyor emas. Yana bir marta urinib ko‘ring.");
     });
   }, [tryTelegramLogin]);
 
-  // Format phone number as +998 XX XXX XX XX
-  const formatPhoneNumber = (value: string) => {
-    let digits = value.replace(/\D/g, "");
-    if (digits.length === 9 && !digits.startsWith("998")) digits = "998" + digits;
-    if (digits.length > 12) digits = digits.slice(0, 12);
-
-    let formatted = "+";
-    for (let i = 0; i < Math.min(3, digits.length); i++) formatted += digits[i];
-    if (digits.length > 3) { formatted += " "; for (let i = 3; i < Math.min(5, digits.length); i++) formatted += digits[i]; }
-    if (digits.length > 5) { formatted += " "; for (let i = 5; i < Math.min(8, digits.length); i++) formatted += digits[i]; }
-    if (digits.length > 8) { formatted += " "; for (let i = 8; i < Math.min(10, digits.length); i++) formatted += digits[i]; }
-    if (digits.length > 10) { formatted += " "; for (let i = 10; i < digits.length; i++) formatted += digits[i]; }
-    return formatted;
-  };
-
-  const getRawPhone = () => "+" + phone.replace(/\D/g, "");
-
-  const startResendTimer = () => {
-    setResendTimer(60);
-    const interval = setInterval(() => {
-      setResendTimer((t) => {
-        if (t <= 1) { clearInterval(interval); return 0; }
-        return t - 1;
-      });
-    }, 1000);
-  };
-
-  const handleSendCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    const digits = phone.replace(/\D/g, "");
-    if (digits.length !== 12) {
-      setError(`Telefon raqam to'liq emas (${digits.length}/12 ta raqam)`);
-      setLoading(false);
-      return;
-    }
-    if (!digits.startsWith("998")) {
-      setError("O'zbekiston raqami bo'lishi kerak (+998...)");
-      setLoading(false);
-      return;
-    }
-
+  const sendCode = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!phoneIsValid) return setError("Telefon raqamni +998 formatida to‘liq kiriting");
+    setLoading(true); setError(""); setNotice(""); setDevCode(null);
     try {
-      const { data } = await axios.post(`${API_URL}/auth/send-otp`, { phone: getRawPhone() });
-      setStep("code");
-      setCodeSent(true);
-      startResendTimer();
-      // Dev mode: backend returns OTP code for testing
-      if (data?.devCode) {
-        setDevCode(data.devCode);
-        // Auto-fill for dev mode
-        setCode(data.devCode);
-      } else {
-        setDevCode(null);
-      }
-    } catch (err: any) {
-      const msg = err?.response?.data?.message;
-      setError(Array.isArray(msg) ? msg.join(", ") : msg || "SMS yuborishda xato. Qayta urinib ko'ring.");
-    } finally {
-      setLoading(false);
-    }
+      const { data } = await axios.post(`${API_URL}/auth/send-otp`, { phone: normalizedPhone });
+      const localCode = data?.devMode && /^\d{6}$/.test(String(data?.devCode || ""))
+        ? String(data.devCode)
+        : null;
+      setStep("code"); setCode(localCode || ""); setDevCode(localCode);
+      setResendTimer(Number(data?.resendAfterSeconds) || 60);
+      setNotice(data?.message || "Kirish kodi Telegramga yuborildi");
+    } catch (requestError) {
+      setError(apiMessage(requestError, "Telegramga kod yuborib bo‘lmadi"));
+    } finally { setLoading(false); }
   };
 
-  const handleResendCode = async () => {
-    if (resendTimer > 0) return;
-    setLoading(true);
-    setError("");
-    try {
-      const { data } = await axios.post(`${API_URL}/auth/send-otp`, { phone: getRawPhone() });
-      setCode("");
-      startResendTimer();
-      if (data?.devCode) setDevCode(data.devCode);
-      else setDevCode(null);
-    } catch (err: any) {
-      const msg = err?.response?.data?.message;
-      setError(Array.isArray(msg) ? msg.join(", ") : msg || "SMS yuborishda xato.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
-      setError("6 xonali raqamli kodni kiriting");
-      setLoading(false);
-      return;
-    }
-
+  const verifyCode = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!/^\d{6}$/.test(code)) return setError("6 xonali kirish kodini to‘liq kiriting");
+    setLoading(true); setError("");
     try {
       const { data } = await axios.post(`${API_URL}/auth/verify-otp`, {
-        phone: getRawPhone(),
-        code,
+        phone: normalizedPhone, code, device: { type: "web", browser: navigator.userAgent },
       });
-
-      // Save tokens first (before setUser, so API calls work immediately)
-      setTokens(data.accessToken, data.refreshToken);
-
-      // Save user with stores
-      setUser({
-        id: data.user.id,
-        phone: data.user.phone,
-        email: data.user.email ?? undefined,
-        name: data.user.name ?? undefined,
-        avatar: data.user.avatar ?? undefined,
-        stores: (data.user.stores ?? []).map((s: any) => ({
-          id: s.id,
-          name: s.name,
-          domain: s.domain ?? undefined,
-          plan: s.plan ?? undefined,
-        })),
-      });
-
-      router.push("/dashboard");
-    } catch (err: any) {
-      const msg = err?.response?.data?.message;
-      if (err?.response?.status === 400) {
-        setError("Kod noto'g'ri yoki muddati o'tgan. Qayta kod so'rang.");
-      } else {
-        setError(Array.isArray(msg) ? msg.join(", ") : msg || "Tasdiqlashda xato. Qayta urinib ko'ring.");
-      }
-    } finally {
-      setLoading(false);
-    }
+      applyLogin(data);
+    } catch (requestError) {
+      setCode("");
+      setError(apiMessage(requestError, "Kod noto‘g‘ri yoki muddati tugagan"));
+      window.setTimeout(() => codeInput.current?.focus(), 0);
+    } finally { setLoading(false); }
   };
 
-  // Telegram orqali avtomatik kirish jarayoni — to'liq ekran loader
+  const changePhone = () => {
+    setStep("phone"); setCode(""); setError(""); setNotice(""); setDevCode(null);
+  };
+
   if (tgPhase === "checking") {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-[#09090b] p-6 text-center">
-        <div className="w-16 h-16 rounded-2xl gradient-primary flex items-center justify-center shadow-lg shadow-[#8b5cf6]/20 mb-5">
-          <Send className="w-7 h-7 text-white" />
+      <main className="login-shell flex min-h-[var(--app-height,100dvh)] items-center justify-center bg-[var(--bg-base)] text-[var(--text-primary)]">
+        <div role="status" className="flex items-center gap-3 rounded-2xl border border-[#27272a] bg-[#0f0f16] px-5 py-4 text-sm text-[#a1a1aa] shadow-2xl shadow-black/40">
+          <Send className="h-5 w-5 text-[#38bdf8]" />
+          <Loader2 className="h-4 w-4 animate-spin text-[#38bdf8]" />
+          Telegram orqali kirish tekshirilmoqda…
         </div>
-        <Loader2 className="w-6 h-6 text-[#8b5cf6] animate-spin mb-3" />
-        <p className="text-[#fafafa] font-medium">Telegram orqali kirilmoqda…</p>
-        <p className="text-[#71717a] text-sm mt-1">Bir lahza kuting</p>
-      </div>
+      </main>
+    );
+  }
+
+  if (!hasHydrated || checkingStoredSession) {
+    return (
+      <main className="login-shell flex min-h-[var(--app-height,100dvh)] items-center justify-center bg-[var(--bg-base)] text-[var(--text-primary)]">
+        <div role="status" className="flex items-center gap-3 rounded-2xl border border-[#27272a] bg-[#0f0f16] px-5 py-4 text-sm text-[#a1a1aa] shadow-2xl shadow-black/40">
+          <Loader2 className="h-5 w-5 animate-spin text-[#38bdf8]" />
+          Sessiya tekshirilmoqda…
+        </div>
+      </main>
+    );
+  }
+
+  if (isAuthenticated && sessionRestoreError) {
+    return (
+      <main className="login-shell flex min-h-[var(--app-height,100dvh)] items-center justify-center bg-[var(--bg-base)] px-4 text-[var(--text-primary)]">
+        <div role="alert" className="max-w-md rounded-2xl border border-[#27272a] bg-[#0f0f16] p-6 text-center">
+          <p className="text-sm leading-6 text-[#a1a1aa]">{sessionRestoreError}</p>
+          <button type="button" onClick={() => setSessionRetry((value) => value + 1)} className="mt-4 rounded-xl bg-[#0ea5e9] px-4 py-2 text-sm font-medium">Qayta tekshirish</button>
+        </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-dvh flex items-center justify-center bg-[#09090b] p-4">
-      {/* Background Effects */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[#8b5cf6]/10 rounded-full blur-3xl animate-pulse-subtle" />
-        <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-[#10b981]/10 rounded-full blur-3xl animate-pulse-subtle" style={{ animationDelay: "1s" }} />
+    <main className="login-shell relative min-h-[var(--app-height,100dvh)] overflow-hidden bg-[var(--bg-base)] px-3 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] text-[var(--text-primary)] sm:px-6 sm:py-8 lg:flex lg:items-center lg:py-12">
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-40 top-[-18rem] h-[34rem] w-[34rem] rounded-full bg-[#6d5dfb]/12 blur-3xl" />
+        <div className="absolute -bottom-72 right-[-8rem] h-[38rem] w-[38rem] rounded-full bg-[#0ea5e9]/8 blur-3xl" />
+        <div className="login-grid absolute inset-0" />
       </div>
 
-      <div className="relative w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-2xl gradient-primary mx-auto flex items-center justify-center shadow-lg shadow-[#8b5cf6]/20 mb-4">
-            <span className="text-white font-bold text-2xl">U</span>
-          </div>
-          <h1 className="text-2xl font-semibold text-[#fafafa]">Uzum Dashboard</h1>
-          <p className="text-[#71717a] mt-2">Do'koningizni boshqaring</p>
-        </div>
-
-        {/* Card */}
-        <div className="rounded-2xl bg-[#0a0a0f] border border-[#27272a] p-6 sm:p-8 shadow-xl">
-          {/* Telegram: telefon ulanmagan — bir tugma bilan ulash */}
-          {tgPhase === "not-linked" && (
-            <div className="mb-6 rounded-xl bg-gradient-to-br from-[#229ED9]/15 to-[#229ED9]/5 border border-[#229ED9]/30 p-4">
-              <div className="flex items-center gap-2.5 mb-2">
-                <div className="w-9 h-9 rounded-xl bg-[#229ED9]/20 flex items-center justify-center flex-shrink-0">
-                  <Send className="w-4.5 h-4.5 text-[#229ED9]" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-white">Telegram orqali tezkor kirish</p>
-                  <p className="text-[11px] text-[#a1a1aa]">Telefon raqamingizni bir marta ulang</p>
-                </div>
-              </div>
-              <button
-                onClick={shareContactAndRetry}
-                disabled={loading}
-                className="w-full h-11 rounded-xl bg-[#229ED9] hover:bg-[#1d8bc0] text-white font-medium transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Smartphone className="w-4 h-4" /> Telefon raqamni ulashish</>}
-              </button>
-              <p className="text-[11px] text-[#52525b] text-center mt-2">yoki quyida raqam bilan kiring</p>
-            </div>
-          )}
-
-          {/* Step Indicator */}
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
-              step === "code" ? "bg-[#10b981] text-white" : "bg-[#8b5cf6] text-white"
-            }`}>
-              {step === "code" ? <CheckCircle2 className="w-4 h-4" /> : "1"}
-            </div>
-            <div className={`flex-1 h-0.5 rounded-full transition-all ${step === "code" ? "bg-[#8b5cf6]" : "bg-[#27272a]"}`} />
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-all ${
-              step === "code" ? "bg-[#8b5cf6] text-white" : "bg-[#18181b] text-[#71717a]"
-            }`}>
-              2
-            </div>
+      <div className="login-card relative mx-auto grid w-full max-w-5xl overflow-hidden rounded-[24px] lg:grid-cols-[.88fr_1.12fr]">
+        <section className="login-intro relative border-b border-[var(--border-subtle)] p-6 sm:p-10 lg:border-b-0 lg:border-r lg:p-12">
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#38bdf8] to-transparent" />
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-[#38bdf8]/25 bg-[#0ea5e9]/10 text-[#38bdf8]"><ShieldCheck className="h-5 w-5" /></div>
+            <div><p className="text-sm font-semibold tracking-wide">Uzum Dashboard</p><p className="mt-0.5 text-xs text-[#71717a]">Telegram bilan tasdiqlangan kirish</p></div>
           </div>
 
-          {error && (
-            <div className="mb-4 p-3 rounded-xl bg-[#ef4444]/10 border border-[#ef4444]/20 flex items-start gap-2">
-              <ShieldCheck className="w-4 h-4 text-[#ef4444] mt-0.5 flex-shrink-0" />
-              <span className="text-sm text-[#ef4444]">{error}</span>
-            </div>
-          )}
+          <div className="mt-12 max-w-md">
+            <p className="text-xs font-semibold uppercase tracking-[.24em] text-[#38bdf8]">Parolsiz. Xavfsiz. Tez.</p>
+            <h1 className="mt-4 text-3xl font-semibold leading-[1.12] tracking-[-.03em] sm:text-4xl">Telefon raqamingiz — akkauntingiz kaliti.</h1>
+            <p className="mt-5 text-sm leading-6 text-[#a1a1aa]">Productionda kod akkauntga avvaldan bog‘langan Telegram chatiga yuboriladi. Lokal development rejimida test kodi ekranda ko‘rsatiladi.</p>
+          </div>
 
-          {step === "phone" ? (
-            <form onSubmit={handleSendCode} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-[#71717a] mb-2">
-                  Telefon raqam
-                </label>
-                <div className="relative">
-                  <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#71717a]" />
-                  <input
-                    type="tel"
-                    inputMode="numeric"
-                    value={phone}
-                    onChange={(e) => { setPhone(formatPhoneNumber(e.target.value)); setError(""); }}
-                    placeholder="+998 91 750 05 67"
-                    className="w-full h-12 pl-12 pr-4 rounded-xl bg-[#18181b] border border-[#27272a] text-[#fafafa] placeholder:text-[#71717a] focus:outline-none focus:border-[#8b5cf6] focus:ring-2 focus:ring-[#8b5cf6]/20 transition-all"
-                    autoFocus
-                  />
-                </div>
-                <p className="text-xs text-[#71717a] mt-2">Masalan: +998 91 750 05 67</p>
+          <div className="mt-10 space-y-3">
+            {[
+              [MessageCircleMore, "Kod Telegramga yuboriladi", "Telefon raqami ochiq xabarda ko‘rinmaydi."],
+              [LockKeyhole, "5 urinishdan keyin himoya", "Takroriy noto‘g‘ri kodlar vaqtincha bloklanadi."],
+              [Clock3, "Uzoq muddatli sessiya", "Tasdiqlangan qurilmada sessiya 365 kungacha yangilanadi."],
+            ].map(([Icon, title, description]) => (
+              <div key={String(title)} className="flex gap-3 rounded-2xl border border-[#27272a] bg-[#18181b]/55 p-4">
+                <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[#38bdf8]" />
+                <div><p className="text-sm font-medium text-[#f4f4f5]">{String(title)}</p><p className="mt-1 text-xs leading-5 text-[#71717a]">{String(description)}</p></div>
               </div>
+            ))}
+          </div>
+        </section>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full h-12 rounded-xl gradient-primary text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Kod yuborish"}
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyCode} className="space-y-4">
-              <div className="text-center mb-4">
-                <p className="text-sm text-[#a1a1aa]">
-                  <span className="text-[#fafafa] font-medium">{phone}</span> ga SMS kod yuborildi
-                </p>
-                <button
-                  type="button"
-                  onClick={() => { setStep("phone"); setCodeSent(false); setCode(""); setError(""); setDevCode(null); }}
-                  className="text-[#8b5cf6] text-sm font-medium hover:underline mt-1"
-                >
-                  Raqamni o'zgartirish
+        <section className="flex min-h-[520px] items-center p-5 sm:p-10 lg:p-14">
+          <div className="mx-auto w-full max-w-md">
+            {tgPhase === "not-linked" && (
+              <div className="mb-6 rounded-2xl border border-[#38bdf8]/25 bg-[#0ea5e9]/10 p-4">
+                <div className="flex items-start gap-3">
+                  <Send className="mt-0.5 h-5 w-5 shrink-0 text-[#38bdf8]" />
+                  <div>
+                    <p className="text-sm font-semibold text-[#f4f4f5]">Telegram akkauntingizni ulang</p>
+                    <p className="mt-1 text-xs leading-5 text-[#a1a1aa]">Bir marta telefon kontaktingizni ulashing — keyingi safar WebApp avtomatik ochiladi.</p>
+                  </div>
+                </div>
+                <button type="button" disabled={loading} onClick={shareContactAndRetry} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#229ED9] px-4 text-sm font-semibold text-white transition hover:bg-[#168ac0] disabled:opacity-50">
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Smartphone className="h-4 w-4" />}
+                  Telefonni Telegram orqali ulash
                 </button>
               </div>
+            )}
+            <div className="mb-8 flex items-center gap-3">
+              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ${step === "phone" ? "bg-[#0ea5e9] text-white" : "bg-[#10b981] text-white"}`}>{step === "phone" ? "1" : <CheckCircle2 className="h-4 w-4" />}</div>
+              <div className="h-px flex-1 bg-[#27272a]"><div className={`h-px bg-[#0ea5e9] transition-all ${step === "code" ? "w-full" : "w-0"}`} /></div>
+              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold ${step === "code" ? "bg-[#0ea5e9] text-white" : "border border-[#3f3f46] text-[#71717a]"}`}>2</div>
+            </div>
 
-              {/* Dev mode banner: shows OTP when SMS_PROVIDER=console */}
-              {devCode && (
-                <div className="rounded-xl bg-gradient-to-br from-[#f59e0b]/15 to-[#f59e0b]/5 border border-[#f59e0b]/30 p-3 flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#f59e0b]/20 flex items-center justify-center flex-shrink-0">
-                    <ShieldCheck className="w-4 h-4 text-[#f59e0b]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[11px] uppercase tracking-wider text-[#f59e0b] font-semibold">Dev rejimi</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <code className="text-lg font-mono font-bold text-[#fafafa] tracking-[0.3em]">{devCode}</code>
-                      <button
-                        type="button"
-                        onClick={() => setCode(devCode)}
-                        className="text-[10px] px-2 py-0.5 rounded-md bg-[#f59e0b] text-black font-semibold hover:bg-[#fbbf24] transition-colors"
-                      >
-                        Auto-fill
-                      </button>
-                    </div>
-                  </div>
+            {error && <div role="alert" className="mb-5 flex gap-2.5 rounded-2xl border border-[#ef4444]/25 bg-[#ef4444]/10 p-3.5 text-sm leading-5 text-[#fca5a5]"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div>}
+
+            {step === "phone" ? (
+              <form onSubmit={sendCode}>
+                <KeyRound className="h-8 w-8 text-[#38bdf8]" />
+                <h2 className="mt-5 text-2xl font-semibold tracking-[-.02em]">Akkauntga kirish</h2>
+                <p className="mt-2 text-sm leading-6 text-[#a1a1aa]">Ro‘yxatdan o‘tgan telefon raqamingizni kiriting. Agar akkaunt mavjud bo‘lsa, Telegramga bir martalik kod yuboramiz.</p>
+                <label htmlFor="phone" className="mt-7 block text-xs font-semibold text-[#71717a]">Telefon raqami</label>
+                <div className="relative mt-2">
+                  <Smartphone className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#71717a]" />
+                  <input id="phone" type="tel" autoComplete="tel" autoFocus value={phone} onChange={(event) => setPhone(formatPhone(event.target.value))} placeholder="+998 90 123 45 67" className="h-14 w-full rounded-2xl border border-[#3f3f46] bg-[#18181b] pl-11 pr-4 text-base outline-none transition placeholder:text-[#52525b] focus:border-[#38bdf8] focus:ring-4 focus:ring-[#0ea5e9]/10" />
                 </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-[#71717a] mb-2">
-                  Tasdiqlash kodi
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={code}
-                  onChange={(e) => { setCode(e.target.value.replace(/\D/g, "").slice(0, 6)); setError(""); }}
-                  placeholder="000000"
-                  maxLength={6}
-                  className="w-full h-14 px-4 rounded-xl bg-[#18181b] border border-[#27272a] text-2xl font-mono text-center text-[#fafafa] placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6] focus:ring-2 focus:ring-[#8b5cf6]/20 tracking-[0.5em] transition-all"
-                  autoFocus
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading || code.length !== 6}
-                className="w-full h-12 rounded-xl gradient-primary text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><span>Kirish</span> <ArrowRight className="w-4 h-4" /></>}
-              </button>
-
-              {/* Resend */}
-              <div className="text-center">
-                {resendTimer > 0 ? (
-                  <p className="text-sm text-[#52525b]">
-                    Qayta yuborish: <span className="text-[#71717a] font-mono">{resendTimer}s</span>
-                  </p>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleResendCode}
-                    disabled={loading}
-                    className="text-sm text-[#8b5cf6] hover:underline flex items-center gap-1 mx-auto disabled:opacity-50"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Kodni qayta yuborish
-                  </button>
+                <button disabled={loading || !phoneIsValid} className="mt-4 flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#0ea5e9] px-4 text-sm font-semibold text-white transition hover:bg-[#0284c7] disabled:cursor-not-allowed disabled:opacity-45">
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><span>Telegramga kod yuborish</span><ArrowRight className="h-4 w-4" /></>}
+                </button>
+                <p className="mt-4 text-center text-xs leading-5 text-[#52525b]">Akkaunt topilmasa yangi profil avtomatik ochilmaydi.</p>
+              </form>
+            ) : (
+              <form onSubmit={verifyCode}>
+                <MessageCircleMore className="h-8 w-8 text-[#38bdf8]" />
+                <h2 className="mt-5 text-2xl font-semibold tracking-[-.02em]">Telegram kodini kiriting</h2>
+                <p className="mt-2 text-sm leading-6 text-[#a1a1aa]"><span className="font-medium text-white">{phone}</span> uchun yuborilgan kirish kodini kiriting.</p>
+                {notice && <div className="mt-5 flex items-center gap-2 rounded-xl border border-[#10b981]/20 bg-[#10b981]/10 px-3 py-2.5 text-xs text-[#6ee7b7]"><CheckCircle2 className="h-4 w-4" />{notice}</div>}
+                {devCode && (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-3 py-2.5 text-xs text-[#fde68a]">
+                    <span>Lokal test kodi: <code className="ml-1 font-mono text-sm font-bold tracking-[.18em] text-white">{devCode}</code></span>
+                    <button type="button" onClick={() => setCode(devCode)} className="rounded-lg bg-[#f59e0b] px-2.5 py-1 font-semibold text-black hover:bg-[#fbbf24]">Kiritish</button>
+                  </div>
                 )}
-              </div>
-            </form>
-          )}
-        </div>
-
-        <p className="text-center text-sm text-[#71717a] mt-6">
-          Kirish orqali{" "}
-          <a href="#" className="text-[#8b5cf6] hover:underline">Foydalanish shartlari</a>{" "}
-          va{" "}
-          <a href="#" className="text-[#8b5cf6] hover:underline">Maxfiylik siyosati</a>
-          {" "}ga rozilik bildirasiz
-        </p>
+                <label htmlFor="code" className="mt-7 block text-xs font-semibold text-[#71717a]">6 xonali kod</label>
+                <input ref={codeInput} id="code" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" className="mt-2 h-16 w-full rounded-2xl border border-[#3f3f46] bg-[#18181b] px-4 text-center font-mono text-2xl tracking-[.42em] outline-none transition placeholder:text-[#3f3f46] focus:border-[#38bdf8] focus:ring-4 focus:ring-[#0ea5e9]/10" />
+                <button disabled={loading || code.length !== 6} className="mt-4 flex h-13 w-full items-center justify-center gap-2 rounded-2xl bg-[#0ea5e9] px-4 text-sm font-semibold text-white transition hover:bg-[#0284c7] disabled:cursor-not-allowed disabled:opacity-45">
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><span>Tasdiqlash va kirish</span><ArrowRight className="h-4 w-4" /></>}
+                </button>
+                <div className="mt-5 flex items-center justify-between text-xs">
+                  <button type="button" onClick={changePhone} className="flex items-center gap-1.5 text-[#a1a1aa] transition hover:text-white"><ArrowLeft className="h-3.5 w-3.5" />Raqamni o‘zgartirish</button>
+                  <button type="button" disabled={loading || resendTimer > 0} onClick={() => void sendCode()} className="flex items-center gap-1.5 text-[#38bdf8] transition hover:text-[#7dd3fc] disabled:text-[#52525b]"><RefreshCw className="h-3.5 w-3.5" />{resendTimer ? `${resendTimer} soniya` : "Kodni qayta yuborish"}</button>
+                </div>
+              </form>
+            )}
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }

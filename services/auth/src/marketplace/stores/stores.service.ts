@@ -9,7 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../common/database/prisma.service';
 import { UzumApiClient } from '../../uzum/client/uzum-api.client';
 import { encrypt, decrypt } from '../../common/utils/crypto.util';
-import { ConnectStoreDto, UpdateConnectionDto } from './dto/stores.dto';
+import { ConnectStoreDto, UpdateConnectionDto, UpdateSmartupSettingsDto } from './dto/stores.dto';
 
 @Injectable()
 export class StoresService {
@@ -226,6 +226,66 @@ export class StoresService {
     });
 
     return { updated: true };
+  }
+
+  async getSmartupSettings(userId: string, storeId: string) {
+    const store = await this.prisma.store.findFirst({
+      where: { id: storeId, userId },
+      select: { id: true, name: true, smartupClientId: true },
+    });
+    if (!store) throw new NotFoundException("Do'kon topilmadi");
+
+    const configuredClientId = store.smartupClientId?.trim() || null;
+    const defaultClientId = this.config.get<string>('SMARTUP_PERSON_CODE')?.trim() || null;
+    return {
+      storeId: store.id,
+      storeName: store.name,
+      clientId: configuredClientId,
+      effectiveClientId: configuredClientId || defaultClientId,
+      usesDefault: !configuredClientId,
+    };
+  }
+
+  async updateSmartupSettings(userId: string, storeId: string, dto: UpdateSmartupSettingsDto) {
+    const clientId = dto.clientId.trim();
+    if (!clientId) throw new BadRequestException('Smartup klient ID ni kiriting');
+
+    const store = await this.prisma.store.findFirst({
+      where: { id: storeId, userId },
+      select: { id: true, smartupClientId: true },
+    });
+    if (!store) throw new NotFoundException("Do'kon topilmadi");
+
+    await this.prisma.$transaction([
+      this.prisma.store.update({
+        where: { id: storeId },
+        data: { smartupClientId: clientId },
+      }),
+      this.prisma.auditLog.create({
+        data: {
+          action: 'SMARTUP_CLIENT_UPDATED',
+          userId,
+          entity: 'Store',
+          entityId: storeId,
+          metadata: {
+            previousClientId: store.smartupClientId,
+            smartupClientId: clientId,
+          },
+        },
+      }),
+    ]);
+
+    return this.getSmartupSettings(userId, storeId);
+  }
+
+  async resolveSmartupClientId(userId: string, storeId: string): Promise<string> {
+    const settings = await this.getSmartupSettings(userId, storeId);
+    if (!settings.effectiveClientId) {
+      throw new BadRequestException(
+        "Smartup klient ID sozlanmagan. Sozlamalar → Smartup bo'limidan klient ID ni kiriting.",
+      );
+    }
+    return settings.effectiveClientId;
   }
 
   async testConnection(userId: string, storeId: string): Promise<{ healthy: boolean; shopName?: string; latencyMs?: number }> {

@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Manrope, JetBrains_Mono } from "next/font/google";
 import { Providers } from "@/components/providers";
 import { TelegramInit } from "@/components/telegram-init";
+import { CartProvider } from "@/hooks/useCart";
 import "./globals.css";
 
-const inter = Inter({
+const manrope = Manrope({
   variable: "--font-sans",
   subsets: ["latin"],
   display: "swap",
@@ -17,21 +18,25 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Uzum Dashboard",
-  description: "Analytics and finance dashboard for Uzum Market",
+  title: {
+    default: "Uzum Seller Hub",
+    template: "%s | Uzum Seller Hub",
+  },
+  description: "Uzum Marketplace savdo, moliya, ombor va tahlil boshqaruv markazi.",
+  applicationName: "Uzum Seller Hub",
 };
 
-// Telefon va Telegram WebApp uchun: zoom o'chirilgan (input fokusda sakrash
-// bo'lmaydi, tugmalar bir bosishda ishlaydi), viewport-fit=cover safe-area uchun.
+// Telegram WebApp va zamonaviy telefonlarda notch/safe-area bilan to'liq ekran.
+// Zoom ochiq qoladi: bu jadval va hisobotlarni o'qishda accessibility uchun muhim.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  maximumScale: 5,
+  userScalable: true,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
-    { media: "(prefers-color-scheme: light)", color: "#f5f6f8" },
+    { media: "(prefers-color-scheme: dark)", color: "#090d18" },
+    { media: "(prefers-color-scheme: light)", color: "#f4f6fb" },
   ],
 };
 
@@ -62,7 +67,7 @@ export default function RootLayout({
   return (
     <html
       lang="uz"
-      className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      className={`${manrope.variable} ${jetbrainsMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <head>
@@ -70,7 +75,9 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col" suppressHydrationWarning>
         <TelegramInit />
-        <Providers>{children}</Providers>
+        <Providers>
+          <CartProvider>{children}</CartProvider>
+        </Providers>
       </body>
     </html>
   );

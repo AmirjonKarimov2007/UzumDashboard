@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import {
   RefreshCw, Search, Package, AlertCircle, Sparkles, Loader2,
@@ -14,18 +14,8 @@ import { useSyncStatus } from "@/hooks/use-sync";
 import { printQrLabels, type QrLabelEntry } from "@/lib/qr-print";
 import { HandlingLabelsPanel } from "@/components/labels/handling-labels-panel";
 import { toast } from "sonner";
-
-function uzumThumb(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  if (/\/t_product_|\/original\.jpg|\.jpg$/i.test(raw)) {
-    return raw.replace(/\/(t_product_[^/]+|original\.jpg)$/i, "/t_product_240_high.jpg");
-  }
-  return raw + "/t_product_240_high.jpg";
-}
-function getImageUrl(p: any): string | null {
-  if (Array.isArray(p.imageUrls) && p.imageUrls.length) return p.imageUrls[0];
-  return p.image || p.previewImg || p.previewImage || null;
-}
+import { productImageUrl } from "@/lib/uzum-image";
+import { useAuthStore } from "@/stores/auth-store";
 
 interface SkuVariant {
   skuId: number | string;
@@ -59,6 +49,7 @@ function NotConnectedState() {
 }
 
 export default function LabelsPage() {
+  const storeId = useAuthStore((state) => state.activeStoreId);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -79,22 +70,15 @@ export default function LabelsPage() {
   const { data: metaMap } = useProductMeta();
   const searching = debouncedSearch.trim().length > 0;
 
-  const { data: meta } = useLiveProducts({ page: 0, size: 1 });
-  const total = meta?.total || 0;
+  const { data, isLoading, isError, isFetching, refetch } = useLiveProducts({
+    page, size: pageSize, sortBy: 'CREATED_AND_TITLE', order: 'DESC', search: debouncedSearch.trim() || undefined,
+  }, mode === 'qr');
+  const total = data?.total || 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  // Uzum's natural order is OLDEST-first → walk pages backward + reverse within page.
-  // When searching we fetch a large batch once and filter client-side (so custom
-  // Article/XID also match — Uzum server search only knows name/SKU).
-  const effectivePage = Math.max(0, totalPages - 1 - page);
-  const { data, isLoading, isFetching, refetch } = useLiveProducts({
-    page: searching ? 0 : effectivePage,
-    size: searching ? Math.min(2000, Math.max(total, 100)) : pageSize,
-  });
 
   // Group SKUs UNDER their product (newest products on top), merge seller meta
   const allCards: ProductCard[] = useMemo(() => {
-    const ordered = [...(data?.products || [])].reverse();
+    const ordered = data?.products || [];
     return ordered.map((p: any) => {
       const skus: SkuVariant[] = (Array.isArray(p.skuList) && p.skuList.length ? p.skuList : [])
         .map((s: any) => {
@@ -112,35 +96,19 @@ export default function LabelsPage() {
       return {
         productId: p.productId,
         title: p.title || "Nomsiz",
-        image: uzumThumb(getImageUrl(p)),
+        image: productImageUrl(p, "thumb"),
         skus,
       };
     }).filter((c: ProductCard) => c.skus.length > 0);
   }, [data?.products, metaMap]);
 
-  // Client-side search across name, SKU, barcode, Article code and XID
-  const cards: ProductCard[] = useMemo(() => {
-    if (!searching) return allCards;
-    const q = debouncedSearch.trim().toLowerCase();
-    return allCards.filter((c) =>
-      c.title.toLowerCase().includes(q) ||
-      String(c.productId).toLowerCase().includes(q) ||
-      c.skus.some((s) =>
-        String(s.skuId).toLowerCase().includes(q) ||
-        s.barcode.toLowerCase().includes(q) ||
-        (s.skuFull || "").toLowerCase().includes(q) ||
-        (s.articleCode || "").toLowerCase().includes(q) ||
-        (s.xid || "").toLowerCase().includes(q),
-      ),
-    );
-  }, [allCards, searching, debouncedSearch]);
+  const cards = allCards;
 
   // barcode → variant lookup (for building print entries)
-  const skuByBarcode = useMemo(() => {
-    const m = new Map<string, SkuVariant>();
-    for (const c of cards) for (const s of c.skus) m.set(s.barcode, s);
-    return m;
-  }, [cards]);
+  const skuRegistry = useRef(new Map<string, SkuVariant>());
+  useEffect(() => { skuRegistry.current.clear(); setSelected(new Map()); setPage(0); }, [storeId]);
+  useEffect(() => { for (const c of cards) for (const s of c.skus) skuRegistry.current.set(s.barcode, s); }, [cards]);
+  const skuByBarcode = skuRegistry.current;
 
   const totalLabels = useMemo(() => Array.from(selected.values()).reduce((s, q) => s + q, 0), [selected]);
 
@@ -259,6 +227,8 @@ export default function LabelsPage() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-6 h-6 text-[#8b5cf6] animate-spin" />
         </div>
+      ) : isError ? (
+        <div role="alert" className="rounded-xl border border-[#f59e0b]/30 p-4 text-sm text-[#fbbf24]">Etiketka mahsulotlarini olib bo‘lmadi. <button onClick={() => refetch()} className="underline">Qayta urinish</button></div>
       ) : cards.length === 0 ? (
         <div className="rounded-2xl bg-[#0f0f16] border border-[#1c1c24] py-16 text-center">
           <Package className="w-12 h-12 text-[#3f3f46] mx-auto mb-3" />
@@ -368,7 +338,7 @@ export default function LabelsPage() {
       )}
 
       {/* Pagination */}
-      {!searching && totalPages > 1 && (
+      {totalPages > 1 && (
         <div className="flex items-center justify-between pt-2">
           <p className="text-xs text-[#52525b]">
             Sahifa <span className="text-white font-medium">{page + 1}</span> / {totalPages}

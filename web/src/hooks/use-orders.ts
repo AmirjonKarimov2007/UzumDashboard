@@ -123,7 +123,7 @@ export function useFbsOrders(params: {
   scheme?: 'FBS' | 'DBS';
   dateFrom?: number;
   dateTo?: number;
-}) {
+}, enabled = true) {
   const storeId = useActiveStoreId();
   return useQuery({
     queryKey: ['fbs', 'orders', storeId, params],
@@ -134,13 +134,15 @@ export function useFbsOrders(params: {
       );
       return data as { orders: any[] };
     },
-    enabled: !!storeId,
-    staleTime: 30 * 1000,
+    enabled: enabled && !!storeId,
+    staleTime: 15 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
 /** Counts for every FBS status (parallel) — feeds the tab badges */
-export function useFbsOrderCounts(params?: { dateFrom?: number; dateTo?: number }) {
+export function useFbsOrderCounts(params?: { dateFrom?: number; dateTo?: number }, enabled = true) {
   const storeId = useActiveStoreId();
   return useQuery({
     queryKey: ['fbs', 'orderCounts', storeId, params],
@@ -151,15 +153,35 @@ export function useFbsOrderCounts(params?: { dateFrom?: number; dateTo?: number 
       );
       return data as Record<string, number>;
     },
-    enabled: !!storeId,
+    enabled: enabled && !!storeId,
     staleTime: 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
     refetchInterval: 2 * 60 * 1000,
   });
 }
 
 // ─── FBS Invoices (Ta'minlashlar) ──────────────────────────────────────
 
-export function useFbsInvoices(params?: { statuses?: string; page?: number; size?: number }) {
+export type FbsInvoicesResponse = {
+  invoices: any[];
+  page?: number;
+  size?: number;
+  total?: number;
+  totalPages?: number;
+  hasNext?: boolean;
+};
+
+export type FbsInvoiceSmartupCounts = {
+  all: number;
+  imported: number;
+  notImported: number;
+  missing: number;
+  scannedPages: number;
+  checkedAt: string;
+};
+
+export function useFbsInvoices(params?: { statuses?: string; page?: number; size?: number; smartupFilter?: string }, enabled = true) {
   const storeId = useActiveStoreId();
   return useQuery({
     queryKey: ['fbs', 'invoices', storeId, params],
@@ -168,10 +190,30 @@ export function useFbsInvoices(params?: { statuses?: string; page?: number; size
         `/marketplace/stores/${storeId}/fbs/invoices`,
         { params },
       );
-      return data as { invoices: any[] };
+      return data as FbsInvoicesResponse;
     },
-    enabled: !!storeId,
-    staleTime: 30 * 1000,
+    enabled: enabled && !!storeId,
+    staleTime: 15 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useFbsInvoiceSmartupCounts(params?: { statuses?: string }, enabled = true) {
+  const storeId = useActiveStoreId();
+  return useQuery({
+    queryKey: ['fbs', 'invoiceSmartupCounts', storeId, params],
+    queryFn: async () => {
+      const { data } = await apiClient.get(
+        `/marketplace/stores/${storeId}/fbs/smartup/invoice-counts`,
+        { params },
+      );
+      return data as FbsInvoiceSmartupCounts;
+    },
+    enabled: enabled && !!storeId,
+    staleTime: 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -183,7 +225,10 @@ export function useFbsInvoiceOrders(invoiceId: number | string | null) {
       const { data } = await apiClient.get(
         `/marketplace/stores/${storeId}/fbs/invoices/${invoiceId}/orders`,
       );
-      return data as { orders: any[] };
+      return data as {
+        orders: any[];
+        acceptanceSummary?: { total: number; accepted: number; notAccepted: number };
+      };
     },
     enabled: !!storeId && !!invoiceId,
     staleTime: 60 * 1000,
@@ -260,6 +305,191 @@ export function useCreateFbsInvoice() {
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || "Ta'minlash yaratilmadi");
+    },
+  });
+}
+
+export function useImportOrderToSmartup() {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (order: any) => {
+      const orderId = order?.orderId ?? order?.id;
+      const { data } = await apiClient.post(
+        `/marketplace/stores/${storeId}/fbs/orders/${orderId}/smartup/import`,
+        { invoiceId: String(order.invoiceId ?? '') },
+        { timeout: 120_000 },
+      );
+      return data as { ok: boolean; alreadyImported?: boolean; import?: any };
+    },
+    onSuccess: (data) => {
+      toast.success(data.alreadyImported ? 'Buyurtma avval Smartupga tushgan' : 'Buyurtma Smartupga kochirildi');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Smartupga kochirib bolmadi');
+    },
+    onSettled: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['fbs', 'orders', storeId] }),
+      queryClient.invalidateQueries({ queryKey: ['fbs', 'invoice', storeId] }),
+      queryClient.invalidateQueries({ queryKey: ['fbs', 'invoices', storeId] }),
+      queryClient.invalidateQueries({ queryKey: ['fbs', 'invoiceSmartupCounts', storeId] }),
+    ]),
+  });
+}
+
+export function useImportInvoiceOrdersToSmartup() {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (invoiceId: number | string) => {
+      const { data } = await apiClient.post(
+        `/marketplace/stores/${storeId}/fbs/invoices/${invoiceId}/smartup/import-orders`,
+        undefined,
+        { timeout: 300_000 },
+      );
+      return data as {
+        ok: boolean;
+        alreadyImported?: boolean;
+        total: number;
+        success: number;
+        failed: number;
+        aggregatedProducts?: number;
+        invoiceOrders?: number;
+        acceptedOrders?: number;
+        skippedOrders?: number;
+        import?: { smartupDealId?: string | null };
+        results: any[];
+      };
+    },
+    onSuccess: (data) => {
+      if (data.failed > 0) {
+        const firstError = data.results?.find((item) => !item.ok)?.error;
+        toast.warning(`Smartupga ko'chirish qisman bajarildi: ${data.success}/${data.total}${firstError ? `: ${firstError}` : ''}`);
+      } else if (data.alreadyImported) {
+        toast.success("Ta'minlash Smartupda tekshirildi: hujjat mavjud");
+      } else {
+        const skipped = data.results?.filter((item) => item.alreadyImported).length || 0;
+        const dealId = data.import?.smartupDealId
+          || data.results?.find((item) => item?.import?.smartupDealId)?.import?.smartupDealId;
+        const acceptedSummary = data.invoiceOrders != null && data.acceptedOrders != null
+          ? `${data.acceptedOrders}/${data.invoiceOrders} ta topshirilgan buyurtma`
+          : `${data.success} ta buyurtma`;
+        toast.success(
+          skipped > 0
+            ? `Smartupga ${acceptedSummary} yuborildi: ${data.aggregatedProducts ?? data.success} ta mahsulot qatori, ${skipped} ta buyurtma avval tushgan${dealId ? `. Deal ID: ${dealId}` : ''}`
+            : `Smartupga ${acceptedSummary} yuborildi: ${data.aggregatedProducts ?? data.success} ta mahsulot qatori${dealId ? `. Deal ID: ${dealId}` : ''}`,
+        );
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Smartupga kochirib bolmadi');
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'orders', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoice', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoices', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoiceSmartupCounts', storeId] }),
+      ]);
+    },
+  });
+}
+
+export type SmartupOrderCheckResult = {
+  ok: boolean;
+  exists: boolean;
+  state: 'FOUND' | 'NOT_FOUND' | 'NOT_IMPORTED';
+  uzumOrderId: string;
+  smartupDealId: string | null;
+  smartupExternalId: string | null;
+  remoteStatus: string | null;
+  checkedAt: string;
+  message: string;
+};
+
+export type SmartupInvoiceCheckResult = {
+  ok: boolean;
+  checkedDocuments: number;
+  foundDocuments: number;
+  missingDocuments: number;
+  affectedInvoices: number;
+  failedDocuments: number;
+  skippedRows: number;
+  deletedInvoices: Array<{
+    invoiceId: string;
+    smartupDealId: string | null;
+    smartupExternalId: string;
+  }>;
+  errors: Array<{ invoiceId: string; message: string }>;
+  checkedAt: string;
+};
+
+export function useCheckInvoiceImportsInSmartup() {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await apiClient.post(
+        `/marketplace/stores/${storeId}/fbs/smartup/check-invoices`,
+        undefined,
+        { timeout: 300_000 },
+      );
+      return data as SmartupInvoiceCheckResult;
+    },
+    onSuccess: (data) => {
+      if (data.missingDocuments > 0) {
+        toast.warning(`Smartupdan o‘chirilgan ${data.affectedInvoices} ta ta’minlash topildi`);
+      } else if (data.failedDocuments > 0) {
+        toast.warning(`${data.checkedDocuments} ta hujjatdan ${data.failedDocuments} tasini tekshirib bo‘lmadi`);
+      } else {
+        toast.success(`Tekshirildi: ${data.foundDocuments} ta Smartup hujjati joyida`);
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ta’minlashlarni Smartupda tekshirib bo‘lmadi');
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'orders', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoice', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoices', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoiceSmartupCounts', storeId] }),
+      ]);
+    },
+  });
+}
+
+export function useCheckOrderInSmartup() {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (orderId: number | string) => {
+      const { data } = await apiClient.post(
+        `/marketplace/stores/${storeId}/fbs/orders/${orderId}/smartup/check`,
+        undefined,
+        { timeout: 120_000 },
+      );
+      return data as SmartupOrderCheckResult;
+    },
+    onSuccess: (data) => {
+      if (data.state === 'FOUND') {
+        toast.success(`Order Smartupda mavjud${data.smartupDealId ? `. Deal ID: ${data.smartupDealId}` : ''}`);
+      } else if (data.state === 'NOT_FOUND') {
+        toast.warning('Order Smartupda topilmadi yoki o‘chirilgan. Uni qayta ko‘chirish mumkin.');
+      } else {
+        toast.info('Bu order hali Smartupga ko‘chirilmagan');
+      }
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Smartup holatini tekshirib bo‘lmadi');
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'orders', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoice', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoices', storeId] }),
+        queryClient.invalidateQueries({ queryKey: ['fbs', 'invoiceSmartupCounts', storeId] }),
+      ]);
     },
   });
 }

@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../common/database/prisma.service';
 
 export interface ProductMetaInput {
@@ -40,10 +40,10 @@ export class ProductMetaService {
       const s = (v ?? '').trim();
       return s.length ? s : null;
     };
-    const costPrice =
-      input.costPrice === null || input.costPrice === undefined || Number.isNaN(Number(input.costPrice))
-        ? null
-        : Number(input.costPrice);
+    if (input.costPrice != null && (typeof input.costPrice !== 'number' || !Number.isFinite(input.costPrice) || input.costPrice < 0)) {
+      throw new BadRequestException('Tan narx manfiy bo‘lmagan son bo‘lishi kerak');
+    }
+    const costPrice = input.costPrice ?? null;
     const articleCode = clean(input.articleCode);
     const xid = clean(input.xid);
     const productId = clean(input.productId);
@@ -51,7 +51,13 @@ export class ProductMetaService {
     const row = await this.prisma.productMeta.upsert({
       where: { storeId_skuId: { storeId, skuId } },
       create: { storeId, skuId, productId, costPrice, articleCode, xid },
-      update: { costPrice, articleCode, xid, ...(productId ? { productId } : {}) },
+      // Omitted fields are unchanged; explicit null clears a field.
+      update: {
+        ...(input.costPrice !== undefined ? { costPrice } : {}),
+        ...(input.articleCode !== undefined ? { articleCode } : {}),
+        ...(input.xid !== undefined ? { xid } : {}),
+        ...(input.productId !== undefined ? { productId } : {}),
+      },
     });
 
     return {

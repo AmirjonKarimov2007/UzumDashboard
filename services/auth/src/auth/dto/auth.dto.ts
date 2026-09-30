@@ -1,4 +1,4 @@
-import { IsPhoneNumber, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsPhoneNumber, IsNotEmpty, IsString, MinLength, IsNumber, IsOptional, MaxLength, Length, Matches, IsObject } from 'class-validator';
 
 export class SendOtpDto {
   @IsNotEmpty()
@@ -15,9 +15,12 @@ export class VerifyOtpDto {
 
   @IsNotEmpty()
   @IsString()
-  @MinLength(4)
+  @Length(6, 6)
+  @Matches(/^\d{6}$/)
   code: string;
 
+  @IsOptional()
+  @IsObject()
   device?: {
     type?: string;
     os?: string;
@@ -41,6 +44,49 @@ export class TelegramLoginDto {
 
   ipAddress?: string;
   userAgent?: string;
+}
+
+export class TelegramWidgetLoginDto {
+  @IsNumber()
+  id: number;
+
+  @IsString()
+  @MaxLength(100)
+  first_name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  last_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  username?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  photo_url?: string;
+
+  @IsNumber()
+  auth_date: number;
+
+  @IsNotEmpty()
+  @IsString()
+  hash: string;
+}
+
+export class PasswordLoginDto {
+  @IsNotEmpty()
+  @IsString()
+  phone: string;
+
+  @IsNotEmpty()
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  password: string;
 }
 
 export class RefreshTokenDto {

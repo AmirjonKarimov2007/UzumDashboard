@@ -1,4 +1,4 @@
-import { IsString, IsBoolean, IsOptional, MinLength, Matches, IsNotEmpty } from 'class-validator';
+import { IsString, IsBoolean, IsOptional, MinLength, Matches, IsNotEmpty, MaxLength } from 'class-validator';
 
 export class ConnectStoreDto {
   @IsString()
@@ -17,6 +17,16 @@ export class ConnectStoreDto {
 export class UpdateConnectionDto {
   @IsBoolean()
   autoSync: boolean;
+}
+
+export class UpdateSmartupSettingsDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  @Matches(/^[^\u0000-\u001F\u007F]+$/u, {
+    message: 'Smartup klient ID boshqaruv belgilarini saqlamasligi kerak',
+  })
+  clientId: string;
 }
 
 export class CreateStoreDto {

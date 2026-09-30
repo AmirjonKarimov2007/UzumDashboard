@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 
 @Injectable()
 export class SessionService {
   private redis: Redis;
 
-  constructor() {
+  constructor(private readonly config: ConfigService) {
     this.redis = new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: parseInt(process.env.REDIS_PORT || '6379'),
@@ -33,8 +34,8 @@ export class SessionService {
       createdAt: new Date().toISOString(),
     });
 
-    // Store with 7 day TTL (matches refresh token expiry)
-    await this.redis.setex(key, 7 * 24 * 60 * 60, value);
+    // Keep Redis and database refresh-token lifetimes aligned.
+    await this.redis.setex(key, this.refreshTtlSeconds(), value);
 
     // Add to user's active sessions list
     const userSessionsKey = `user:sessions:${data.userId}`;
@@ -97,5 +98,14 @@ export class SessionService {
     }
 
     return sessions;
+  }
+
+  private refreshTtlSeconds(): number {
+    const raw = this.config.get<string>('REFRESH_TOKEN_EXPIRES_IN') || '365d';
+    const match = raw.match(/^(\d+)([smhd])$/i);
+    if (!match) return 365 * 24 * 60 * 60;
+    const value = Number(match[1]);
+    const units = { s: 1, m: 60, h: 3600, d: 86_400 };
+    return Math.max(60, value * units[match[2].toLowerCase() as keyof typeof units]);
   }
 }

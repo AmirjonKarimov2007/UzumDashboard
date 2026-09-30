@@ -10,7 +10,6 @@ import {
   Wallet,
   Menu,
   Bell,
-  Sparkles,
   BarChart3,
   Boxes,
   Users,
@@ -18,23 +17,26 @@ import {
   Settings,
   RotateCcw,
   X,
+  PackageCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardStore } from "@/stores/dashboard-store";
 import { useState } from "react";
+import { useMe } from "@/hooks/use-users";
 
 const primaryTabs = [
   { name: "Asosiy",      href: "/dashboard",  icon: LayoutDashboard },
   { name: "Buyurtmalar", href: "/orders",      icon: ShoppingCart },
   { name: "Mahsulotlar", href: "/products",    icon: Package },
-  { name: "Moliya",      href: "/finance",     icon: Wallet },
+  { name: "Ta’minlashlar", href: "/supplies",   icon: Boxes },
 ];
 
 const moreItems = [
+  { name: "FBO ta’minlashlar", href: "/fbo-supplies", icon: PackageCheck },
+  { name: "Moliya",         href: "/finance",        icon: Wallet },
   { name: "Analitika",       href: "/analytics",      icon: BarChart3 },
   { name: "Qaytarishlar",    href: "/returns",        icon: RotateCcw },
   { name: "Inventar",        href: "/inventory",      icon: Boxes },
-  { name: "AI Tahlil",       href: "/ai",             icon: Sparkles, badge: "Pro" },
   { name: "Bildirishnomalar", href: "/notifications", icon: Bell },
   { name: "Jamoa",           href: "/team",           icon: Users },
   { name: "Hisobotlar",      href: "/reports",        icon: FileText },
@@ -42,15 +44,17 @@ const moreItems = [
 ];
 
 export function MobileNav() {
+  const { data: me } = useMe();
+  const menuItems = me?.isSuperAdmin ? [...moreItems, { name: 'Super-admin', href: '/super-admin', icon: Users }] : moreItems;
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard";
-    return pathname.startsWith(href);
+    return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  const isMoreActive = moreItems.some((i) => isActive(i.href));
+  const isMoreActive = menuItems.some((i) => isActive(i.href));
 
   return (
     <>
@@ -62,7 +66,7 @@ export function MobileNav() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+              className="fixed inset-0 z-40 bg-[#080b13]/55 backdrop-blur-[2px] lg:hidden"
               onClick={() => setMoreOpen(false)}
             />
             <motion.div
@@ -70,19 +74,23 @@ export function MobileNav() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 24 }}
               transition={{ type: "spring", stiffness: 500, damping: 40 }}
-              className="fixed bottom-[72px] left-0 right-0 z-50 mx-3 rounded-2xl bg-[#0f0f16] border border-[#1c1c24] shadow-elevated overflow-hidden lg:hidden"
+              className="mobile-more-panel fixed bottom-[calc(76px+env(safe-area-inset-bottom,0px))] left-3 right-3 z-50 overflow-hidden lg:hidden"
             >
-              <div className="flex items-center justify-between px-4 py-3 border-b border-[#18181b]">
-                <span className="text-xs font-semibold text-[#71717a] uppercase tracking-widest">Ko'proq</span>
+              <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3.5">
+                <div>
+                  <span className="block text-sm font-bold text-[var(--text-primary)]">Barcha bo‘limlar</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">Kerakli ish maydoniga o‘ting</span>
+                </div>
                 <button
                   onClick={() => setMoreOpen(false)}
-                  className="p-1.5 rounded-lg hover:bg-[#18181b] text-[#71717a] hover:text-white transition-colors"
+                  className="icon-button"
+                  aria-label="Qo‘shimcha menyuni yopish"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="grid grid-cols-4 gap-0.5 p-2">
-                {moreItems.map((item) => {
+              <div className="grid max-h-[min(58vh,440px)] grid-cols-3 gap-1 overflow-y-auto p-2.5 sm:grid-cols-4">
+                {menuItems.map((item) => {
                   const active = isActive(item.href);
                   return (
                     <Link
@@ -90,7 +98,7 @@ export function MobileNav() {
                       href={item.href}
                       onClick={() => setMoreOpen(false)}
                       className={cn(
-                        "relative flex flex-col items-center gap-1.5 p-3 rounded-xl transition-all",
+                        "mobile-more-link relative flex min-h-[74px] flex-col items-center justify-center gap-1.5 rounded-xl p-2.5 transition-colors",
                         active
                           ? "bg-[#8b5cf6]/15 text-[#a78bfa]"
                           : "text-[#71717a] hover:text-white hover:bg-[#18181b]"
@@ -100,11 +108,6 @@ export function MobileNav() {
                         <item.icon className={cn("w-5 h-5", active ? "text-[#8b5cf6]" : "")} />
                       </div>
                       <span className="text-[10px] font-medium leading-tight text-center">{item.name}</span>
-                      {"badge" in item && item.badge && (
-                        <span className="absolute top-2 right-2 text-[8px] font-bold px-1 py-0.5 rounded-full bg-[#8b5cf6]/30 text-[#a78bfa] leading-none">
-                          {item.badge}
-                        </span>
-                      )}
                     </Link>
                   );
                 })}
@@ -115,24 +118,22 @@ export function MobileNav() {
       </AnimatePresence>
 
       {/* Bottom nav bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 lg:hidden">
-        {/* Blur backdrop */}
-        <div className="absolute inset-0 bg-[#09090b]/90 backdrop-blur-xl border-t border-[#18181b]" />
-
-        <div className="relative flex items-center h-[68px] px-2 safe-area-pb">
+      <div className="mobile-dock fixed bottom-0 left-0 right-0 z-40 lg:hidden">
+        <div className="relative flex h-[68px] items-center px-1.5 pb-1 pt-1">
           {primaryTabs.map((tab) => {
             const active = isActive(tab.href);
             return (
               <Link
                 key={tab.href}
                 href={tab.href}
-                className="flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors"
+                className={cn("mobile-dock-link flex-1", active && "is-active")}
+                aria-current={active ? "page" : undefined}
               >
                 <div className="relative">
                   {active && (
                     <motion.div
                       layoutId="mobile-active-bg"
-                      className="absolute inset-0 -m-2 rounded-xl bg-[#8b5cf6]/15"
+                      className="absolute inset-0 -m-2 rounded-xl bg-[var(--accent-soft)]"
                       transition={{ type: "spring", stiffness: 500, damping: 40 }}
                     />
                   )}
@@ -145,7 +146,7 @@ export function MobileNav() {
                 </div>
                 <span
                   className={cn(
-                    "text-[10px] font-medium transition-colors",
+                    "text-[10px] font-semibold transition-colors",
                     active ? "text-[#a78bfa]" : "text-[#52525b]"
                   )}
                 >
@@ -154,7 +155,7 @@ export function MobileNav() {
                 {active && (
                   <motion.div
                     layoutId="mobile-active-dot"
-                    className="absolute bottom-1.5 w-1 h-1 rounded-full bg-[#8b5cf6]"
+                    className="absolute -bottom-2.5 h-1 w-1 rounded-full bg-[var(--accent)]"
                     transition={{ type: "spring", stiffness: 500, damping: 40 }}
                   />
                 )}
@@ -165,7 +166,8 @@ export function MobileNav() {
           {/* More button */}
           <button
             onClick={() => setMoreOpen((o) => !o)}
-            className="flex-1 flex flex-col items-center justify-center gap-1 py-2 transition-colors"
+            className={cn("mobile-dock-link flex-1", (moreOpen || isMoreActive) && "is-active")}
+            aria-label="Barcha bo‘limlar"
           >
             <div className={cn(
               "w-5 h-5 flex items-center justify-center transition-colors",

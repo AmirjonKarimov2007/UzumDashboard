@@ -53,48 +53,34 @@ export function MetricCard({ data, index = 0, className }: MetricCardProps) {
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.07, duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
+      transition={{ delay: Math.min(index, 4) * 0.04, duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       className={cn(
-        "group relative rounded-2xl p-4 sm:p-5 bg-[#0f0f16] border border-[#1c1c24] overflow-hidden",
-        "hover:border-[#27272a] transition-all duration-300",
-        "shadow-card hover:shadow-card-hover",
+        "metric-card group relative overflow-hidden rounded-[18px] p-4 sm:p-5",
         className
       )}
     >
-      {/* Subtle top gradient line */}
-      <div
-        className="absolute top-0 left-0 right-0 h-px opacity-60"
-        style={{ background: `linear-gradient(90deg, transparent, ${accentColor}60, transparent)` }}
-      />
-
-      {/* Background glow on hover */}
-      <div
-        className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none rounded-2xl"
-        style={{ background: `radial-gradient(circle at 20% 50%, ${accentColor}08 0%, transparent 60%)` }}
-      />
-
       <div className="relative flex items-start justify-between gap-4">
         {/* Left */}
         <div className="flex-1 min-w-0">
           {/* Icon */}
           <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center mb-3 sm:mb-4 flex-shrink-0"
-            style={{ background: `${accentColor}18`, border: `1px solid ${accentColor}25` }}
+            className="mb-4 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[11px]"
+            style={{ background: `color-mix(in srgb, ${accentColor} 13%, transparent)`, color: accentColor }}
           >
             <data.icon className="w-4.5 h-4.5" style={{ color: accentColor }} />
           </div>
 
           {/* Value */}
           <div className="mb-1">
-            <span className="text-xl sm:text-2xl font-bold text-white tracking-tight tabular-nums">
-              {data.prefix && <span className="text-lg text-[#71717a] font-normal mr-0.5">{data.prefix}</span>}
+            <span className="text-2xl font-extrabold tracking-[-0.035em] text-[var(--text-primary)] tabular-nums sm:text-[26px]">
+              {data.prefix && <span className="mr-0.5 text-base font-medium text-[var(--text-muted)]">{data.prefix}</span>}
               {data.value}
-              {data.suffix && <span className="text-sm text-[#71717a] font-normal ml-0.5">{data.suffix}</span>}
+              {data.suffix && <span className="ml-1 text-xs font-semibold text-[var(--text-muted)]">{data.suffix}</span>}
             </span>
           </div>
 
           {/* Label */}
-          <p className="text-xs text-[#71717a] font-medium">{data.title}</p>
+          <p className="text-xs font-semibold text-[var(--text-secondary)]">{data.title}</p>
 
           {/* Trend */}
           <div className="flex items-center gap-1.5 mt-2.5 sm:mt-3 flex-wrap">
@@ -117,14 +103,14 @@ export function MetricCard({ data, index = 0, className }: MetricCardProps) {
               )}
               <span>{Math.abs(data.change)}%</span>
             </div>
-            <span className="hidden sm:inline text-[11px] text-[#3f3f46]">
+            <span className="hidden text-[11px] text-[var(--text-muted)] sm:inline">
               {data.changeLabel || "avvalgiga nisbatan"}
             </span>
           </div>
         </div>
 
         {/* Sparkline — mobilda yashirinadi (keraksiz bezak) */}
-        <div className="hidden sm:block flex-shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
+        <div className="hidden flex-shrink-0 opacity-75 sm:block">
           <Sparkline data={data.sparkline} color={accentColor} />
         </div>
       </div>

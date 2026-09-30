@@ -10,6 +10,7 @@ import {
   DefaultValuePipe,
   ParseIntPipe,
   NotFoundException,
+  HttpCode,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { IsArray, IsIn, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
@@ -33,6 +34,22 @@ class StockUpdateItem {
 
   @IsNumber()
   amount!: number;
+
+  @IsOptional()
+  @IsString()
+  barcode?: string;
+
+  @IsOptional()
+  fbsLinked?: boolean;
+
+  @IsOptional()
+  fbsAllowed?: boolean;
+
+  @IsOptional()
+  dbsLinked?: boolean;
+
+  @IsOptional()
+  dbsAllowed?: boolean;
 }
 
 class SetStocksDto {
@@ -110,6 +127,11 @@ class CreateInvoiceDto {
   @IsOptional()
   @IsString()
   idempotencyKey?: string;
+}
+
+class SmartupImportOrderDto {
+  @IsString()
+  invoiceId: string;
 }
 
 @Controller('marketplace/stores/:storeId/fbs')
@@ -269,6 +291,48 @@ export class FbsController {
     return this.fbsService.getSupplyInvoices(userId, storeId, page, size);
   }
 
+  /** FBO ta'minlash nakladnoylari — faqat tanlangan Uzum do'koni uchun. */
+  @Get('fbo/invoices')
+  getFboInvoices(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('page', new DefaultValuePipe(0), ParseIntPipe) page: number,
+    @Query('size', new DefaultValuePipe(20), ParseIntPipe) size: number,
+  ) {
+    return this.fbsService.getFboInvoices(userId, storeId, page, size);
+  }
+
+  /** Bir FBO nakladnoy ichidagi mahsulotlar va SKU'lar. */
+  @Get('fbo/invoices/:invoiceId/products')
+  getFboInvoiceProducts(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.getFboInvoiceProducts(userId, storeId, invoiceId);
+  }
+
+  /** Barcha SKU'lar preflight'dan o'tgandagina FBO nakladnoyni Smartupga yuboradi. */
+  @Post('fbo/invoices/:invoiceId/smartup/import')
+  importFboInvoiceToSmartup(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.importFboInvoiceToSmartup(userId, storeId, invoiceId);
+  }
+
+  /** Avval yuborilgan FBO nakladnoy Smartupda hanuz borligini tekshiradi. */
+  @Post('fbo/invoices/:invoiceId/smartup/check')
+  @HttpCode(200)
+  checkFboInvoiceInSmartup(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.checkFboInvoiceInSmartup(userId, storeId, invoiceId);
+  }
+
   // ─── Invoices (Ta'minlashlar) ────────────────────────────────────────
 
   @Get('invoices')
@@ -278,9 +342,30 @@ export class FbsController {
     @Query('statuses') statusesParam?: string,
     @Query('page', new DefaultValuePipe(0), ParseIntPipe) page?: number,
     @Query('size', new DefaultValuePipe(20), ParseIntPipe) size?: number,
+    @Query('smartupFilter') smartupFilter?: string,
   ) {
     const statuses = statusesParam ? statusesParam.split(',') : undefined;
-    return this.fbsService.getInvoices(userId, storeId, statuses, page, size);
+    return this.fbsService.getInvoices(userId, storeId, statuses, page, size, smartupFilter);
+  }
+
+  @Get('smartup/invoice-counts')
+  getInvoiceSmartupCounts(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('statuses') statusesParam?: string,
+  ) {
+    const statuses = statusesParam ? statusesParam.split(',') : undefined;
+    return this.fbsService.getInvoiceSmartupCounts(userId, storeId, statuses);
+  }
+
+  /** Re-check every previously imported FBS supply against live Smartup data. */
+  @Post('smartup/check-invoices')
+  @HttpCode(200)
+  checkInvoiceImportsInSmartup(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+  ) {
+    return this.fbsService.checkInvoiceImportsInSmartup(userId, storeId);
   }
 
   @Get('invoices/:invoiceId')
@@ -299,6 +384,40 @@ export class FbsController {
     @Param('invoiceId') invoiceId: string,
   ) {
     return this.fbsService.getInvoiceOrders(userId, storeId, invoiceId);
+  }
+
+  @Post('invoices/:invoiceId/smartup/import-orders')
+  importInvoiceOrdersToSmartup(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.fbsService.importInvoiceOrdersToSmartup(userId, storeId, invoiceId);
+  }
+
+  @Post('orders/:orderId/smartup/import')
+  importOrderToSmartup(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+    @Body() dto: SmartupImportOrderDto,
+  ) {
+    return this.fbsService.importOrderToSmartup(userId, storeId, orderId, dto.invoiceId);
+  }
+
+  @Post('orders/:orderId/smartup/check')
+  @HttpCode(200)
+  checkOrderInSmartup(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('orderId') orderId: string,
+  ) {
+    return this.fbsService.checkOrderInSmartup(userId, storeId, orderId);
+  }
+
+  @Get('smartup/check-products')
+  checkSmartupProducts(@CurrentUser('id') userId: string, @Param('storeId') storeId: string) {
+    return this.fbsService.checkSmartupProducts(userId, storeId);
   }
 
   /** Supply act PDF (yuborish dalolatnomasi) — streams the official Uzum PDF */
@@ -395,9 +514,11 @@ export class FbsController {
     @Query('filter') filter?: string,
     @Query('search') searchQuery?: string,
     @Query('sortBy') sortBy?: string,
-    @Query('order') order?: 'asc' | 'desc',
+    @Query('order') order?: 'ASC' | 'DESC' | 'asc' | 'desc',
+    @Query('costFilter') costFilter?: string,
+    @Query('xidFilter') xidFilter?: string,
   ) {
-    return this.fbsService.getLiveProducts(userId, storeId, page, size, filter, searchQuery, sortBy, order);
+    return this.fbsService.getLiveProducts(userId, storeId, page, size, filter, searchQuery, sortBy, order, costFilter, xidFilter);
   }
 
   /** Live finance orders (sales) from Uzum */

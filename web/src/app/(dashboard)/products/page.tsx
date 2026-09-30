@@ -1,26 +1,69 @@
 "use client";
 
+
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search, Package, RefreshCw, AlertCircle, Loader2, Sparkles,
   LayoutGrid, List as ListIcon, Copy, Check, X, Star,
-  TrendingUp, Box, Hash, Tag, Percent, ShoppingCart,
+  TrendingUp, Box, Tag, Percent, ShoppingCart,
   ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, ExternalLink,
-  ZoomIn, Save, Pencil, Wallet,
+  ZoomIn, Save, Pencil, Wallet, Fingerprint,
 } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "@/components/shared/page-header";
+import { SmartupProductCheck } from "@/components/shared/smartup-product-check";
 import { formatCurrency } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-import { useLiveProducts, useProductMeta, useUpsertProductMeta } from "@/hooks/use-products";
+import {
+  useLiveProducts,
+  useProductMeta,
+  useUpsertProductMeta,
+  type LiveProduct,
+  type LiveProductSku,
+  type ProductMetaEntry,
+} from "@/hooks/use-products";
 import { useSyncStatus } from "@/hooks/use-sync";
 import { useDashboardStore } from "@/stores/dashboard-store";
+import { useAuthStore } from "@/stores/auth-store";
 import { usdToUzs } from "@/lib/currency";
+import { extractUzumImageUrl, productImageUrl } from "@/lib/uzum-image";
 
-type Filter = "ALL" | "ACTIVE" | "INACTIVE" | "ARCHIVE" | "DEFECTED" | "WARNING";
+type Filter =
+  | "ALL"
+  | "ACTIVE"
+  | "INACTIVE"
+  | "ARCHIVE"
+  | "DEFECTED"
+  | "WARNING"
+  | "WITH_SKU"
+  | "WITHOUT_REQUIRED_FILTERS";
 type ViewMode = "grid" | "list";
-type SortByOption = "DEFAULT" | "ID" | "ORDERS" | "PRICE" | "ROI" | "CONVERSION" | "LEFTOVERS";
+type SortByOption = "CREATED_AND_TITLE" | "ID" | "ORDERS" | "PRICE" | "ROI" | "CONVERSION" | "LEFTOVERS";
+
+interface ProductRow {
+  productId: string | number;
+  skuId?: string | number;
+  title: string;
+  category: string;
+  image: string | null;
+  price: number;
+  quantityActive: number;
+  quantityFbs: number;
+  quantitySold: number;
+  quantityReturned: number;
+  statusValue: string;
+  statusTitle?: string;
+  rating: number;
+  feedbackQuantity: number;
+  commission: number;
+  rank: string;
+  skuCount: number;
+  barcode?: string | number;
+  skuTitle?: string;
+  meta?: ProductMetaEntry;
+  _raw: LiveProduct;
+}
 
 const filterOptions: { id: Filter; label: string }[] = [
   { id: "ALL",      label: "Barchasi" },
@@ -29,10 +72,12 @@ const filterOptions: { id: Filter; label: string }[] = [
   { id: "ARCHIVE",  label: "Arxiv" },
   { id: "WARNING",  label: "Ogohlantirish" },
   { id: "DEFECTED", label: "Brak" },
+  { id: "WITH_SKU", label: "SKU mavjud" },
+  { id: "WITHOUT_REQUIRED_FILTERS", label: "Majburiy filter to'ldirilmagan" },
 ];
 
 const sortOptions: { id: SortByOption; label: string }[] = [
-  { id: "DEFAULT",    label: "Eng yangilari" },
+  { id: "CREATED_AND_TITLE", label: "Eng yangilari" },
   { id: "ID",         label: "ID bo'yicha" },
   { id: "ORDERS",     label: "Eng ko'p sotilgan" },
   { id: "PRICE",      label: "Narx bo'yicha" },
@@ -61,34 +106,9 @@ const rankConfig: Record<string, { color: string; bg: string }> = {
   N: { color: "#71717a", bg: "rgba(113,113,122,.18)" },
 };
 
-/** Build hi-res Uzum image URL from API field */
-function uzumImageUrl(raw: string | null | undefined, size: "thumb" | "medium" | "high" = "high"): string | null {
-  if (!raw) return null;
-  // If it already has /something.jpg, return as-is for high. For other sizes — replace.
-  if (raw.match(/\/t_product_|\/original\.jpg|\.jpg$/i)) {
-    if (size === "high") return raw.replace(/\/(t_product_[^/]+|original\.jpg)$/i, "/original.jpg");
-    if (size === "medium") return raw.replace(/\/(t_product_[^/]+|original\.jpg)$/i, "/t_product_540_high.jpg");
-    if (size === "thumb") return raw.replace(/\/(t_product_[^/]+|original\.jpg)$/i, "/t_product_240_high.jpg");
-    return raw;
-  }
-  // Base URL only — append suffix
-  const suffix = size === "high" ? "/original.jpg" : size === "medium" ? "/t_product_540_high.jpg" : "/t_product_240_high.jpg";
-  return raw + suffix;
-}
-
 /** Get first image URL from imageUrls array or single image */
-function getImageUrl(product: any): string | null {
-  // Try imageUrls array first (from Uzum API)
-  if (product.imageUrls && Array.isArray(product.imageUrls) && product.imageUrls.length > 0) {
-    return product.imageUrls[0];
-  }
-  // Fall back to image field
-  if (product.image) return product.image;
-  // Try previewImg
-  if (product.previewImg) return product.previewImg;
-  // Try previewImage (from SKU)
-  if (product.previewImage) return product.previewImage;
-  return null;
+function getImageUrl(product: LiveProduct | LiveProductSku): string | null {
+  return extractUzumImageUrl(product, "medium");
 }
 
 function NotConnectedState() {
@@ -132,10 +152,25 @@ function CopyableId({ value, label, mono = true }: { value: string | number; lab
   );
 }
 
-function ProductCard({ row, view, onClick, index }: { row: any; view: ViewMode; onClick: () => void; index: number }) {
+function ProductCard({ row, view, onClick, index }: { row: ProductRow; view: ViewMode; onClick: () => void; index: number }) {
   const st = statusConfig[row.statusValue] || { label: row.statusTitle || row.statusValue, color: "#71717a", bg: "rgba(113,113,122,.15)" };
   const rank = rankConfig[row.rank] || rankConfig.N;
-  const imgUrl = uzumImageUrl(row.image, view === "grid" ? "high" : "medium");
+  // Product cards do not need multi-megabyte originals. Keep the original URL
+  // only as a one-time fallback for stores whose thumbnail rendition is absent.
+  const imgUrl = productImageUrl(row.image, view === "grid" ? "medium" : "thumb");
+
+  const handleImageError = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = event.currentTarget;
+    if (!img.dataset.fallback) {
+      img.dataset.fallback = "1";
+      const fallback = productImageUrl(row.image, "high");
+      if (fallback && fallback !== img.src) {
+        img.src = fallback;
+        return;
+      }
+    }
+    img.style.display = "none";
+  };
 
   if (view === "list") {
     return (
@@ -150,13 +185,7 @@ function ProductCard({ row, view, onClick, index }: { row: any; view: ViewMode; 
             <img src={imgUrl} alt={row.title} loading="lazy"
               className="w-full h-full object-contain p-1"
               referrerPolicy="no-referrer"
-              onError={(e) => {
-                const img = e.target as HTMLImageElement;
-                if (!img.dataset.fallback) {
-                  img.dataset.fallback = "1";
-                  img.src = uzumImageUrl(row.image, "medium") || "";
-                }
-              }}
+              onError={handleImageError}
             />
           ) : (
             <Package className="w-6 h-6 text-[#3f3f46]" />
@@ -215,15 +244,7 @@ function ProductCard({ row, view, onClick, index }: { row: any; view: ViewMode; 
           <img src={imgUrl} alt={row.title} loading="lazy"
             className="w-full h-full object-contain p-2 group-hover:scale-105 transition-transform duration-500"
             referrerPolicy="no-referrer"
-            onError={(e) => {
-              const img = e.target as HTMLImageElement;
-              if (!img.dataset.fallback) {
-                img.dataset.fallback = "1";
-                img.src = uzumImageUrl(row.image, "medium") || "";
-              } else {
-                img.style.display = "none";
-              }
-            }}
+            onError={handleImageError}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
@@ -301,23 +322,6 @@ function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
       />
     </motion.div>
   );
-}
-
-// Format an integer string with thousand spaces: "31600" → "31 600"
-function fmtNum(v: string | number): string {
-  const digits = String(v ?? "").replace(/\D/g, "");
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-}
-const parseNum = (v: string): number | null => {
-  const d = String(v ?? "").replace(/\D/g, "");
-  return d ? Number(d) : null;
-};
-
-// Format price with "so'm" suffix: "150 000 so'm"
-function fmtPrice(v: string | number | null | undefined): string {
-  const num = parseNum(String(v ?? ""));
-  if (!num) return "";
-  return `${fmtNum(num)} so'm`;
 }
 
 // ── USD cost helpers (tan narx USD da kiritiladi) ──
@@ -398,33 +402,35 @@ function calculateNetProfit(
   };
 }
 
-function ProductDetailModal({ product, onClose, metaMap }: { product: any | null; onClose: () => void; metaMap?: Record<string, any> }) {
+function ProductDetailModal({ product, onClose, metaMap }: { product: ProductRow | null; onClose: () => void; metaMap?: Record<string, ProductMetaEntry> }) {
   const [lightbox, setLightbox] = useState<string | null>(null);
   const upsertMeta = useUpsertProductMeta();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [costs, setCosts] = useState<Record<string, string>>({}); // skuId → formatted USD cost
+  const [xids, setXids] = useState<Record<string, string>>({});
   const [article, setArticle] = useState("");
-  const [xid, setXid] = useState("");
   const usdRate = useDashboardStore((s) => s.usdRate);
 
   // The SKU variants for this product (each may have its own price & cost)
-  const skuList: any[] = (product?._raw?.skuList?.length ? product._raw.skuList : [
+  const skuList: LiveProductSku[] = (product?._raw?.skuList?.length ? product._raw.skuList : [
     { skuId: product?.skuId, skuTitle: product?.skuTitle || "", price: product?.price },
-  ]).filter((s: any) => s.skuId != null && String(s.skuId) !== "");
+  ]).filter((s) => s.skuId != null && String(s.skuId) !== "");
   const primarySkuId = String(skuList[0]?.skuId ?? "");
 
   useEffect(() => {
     const next: Record<string, string> = {};
+    const nextXids: Record<string, string> = {};
     for (const s of skuList) {
       const m = metaMap?.[String(s.skuId)];
       next[String(s.skuId)] = m?.costPrice != null ? fmtUsd(m.costPrice) : "";
+      nextXids[String(s.skuId)] = m?.xid ?? "";
     }
     setCosts(next);
+    setXids(nextXids);
     const pm = metaMap?.[primarySkuId];
     setArticle(pm?.articleCode ?? "");
-    setXid(pm?.xid ?? "");
-    const anyCost = skuList.some((s: any) => metaMap?.[String(s.skuId)]?.costPrice != null);
+    const anyCost = skuList.some((s) => metaMap?.[String(s.skuId)]?.costPrice != null);
     setEditing(!anyCost);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.productId, metaMap]);
@@ -436,25 +442,25 @@ function ProductDetailModal({ product, onClose, metaMap }: { product: any | null
   const saveMeta = async () => {
     setSaving(true);
     try {
-      for (const s of skuList) {
+      await Promise.all(skuList.map((s) => {
         const sid = String(s.skuId);
         const isPrimary = sid === primarySkuId;
-        await upsertMeta.mutateAsync({
+        return upsertMeta.mutateAsync({
           skuId: sid,
           productId: product.productId,
           costPrice: parseUsd(costs[sid] || ""),
-          // Article/XID are product-level → stored on the primary SKU only
+          // Article is product-level; XID is stored separately for every SKU.
           articleCode: isPrimary ? (article.trim() || null) : undefined,
-          xid: isPrimary ? (xid.trim() || null) : undefined,
+          xid: xids[sid]?.trim() || null,
         });
-      }
+      }));
       setEditing(false);
     } finally {
       setSaving(false);
     }
   };
   const p = product._raw;
-  const imgUrl = uzumImageUrl(getImageUrl(p), "high");
+  const imgUrl = productImageUrl(getImageUrl(p), "high");
   const st = statusConfig[product.statusValue] || { label: product.statusTitle || product.statusValue, color: "#71717a", bg: "rgba(113,113,122,.15)" };
 
   return (
@@ -565,8 +571,9 @@ function ProductDetailModal({ product, onClose, metaMap }: { product: any | null
                 </div>
 
                 {/* Per-SKU cost rows */}
+                <p className="mb-3 text-[11px] leading-relaxed text-[#a1a1aa]">SKU XID — Smartup mahsulot kodi. Bir mahsulotning turli ranglari yoki boshqa SKU'lari uchun bir xil XID kiritish mumkin. Ta'minlash yuborilganda ularning miqdori qo'shiladi.</p>
                 <div className="space-y-2">
-                  {skuList.map((s: any, sidx: number) => {
+                  {skuList.map((s, sidx: number) => {
                     const sid = String(s.skuId);
                     const m = metaMap?.[sid];
                     const price = Number(s.price || 0);
@@ -610,6 +617,15 @@ function ProductDetailModal({ product, onClose, metaMap }: { product: any | null
                                 <span className={cn("text-xs font-bold w-16 text-right", margin >= 0 ? "text-[#10b981]" : "text-[#ef4444]")}>{margin.toFixed(1)}%</span>
                               )}
                             </div>
+                            <div>
+                              <label className="block text-[10px] text-[#71717a] mb-1">SKU XID</label>
+                              <input
+                                value={xids[sid] || ""}
+                                onChange={(e) => setXids((prev) => ({ ...prev, [sid]: e.target.value }))}
+                                placeholder="falcon-..."
+                                className="w-full h-9 px-3 rounded-lg bg-[#18181b] border border-[#27272a] text-sm text-white placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6] font-mono"
+                              />
+                            </div>
                             {/* Live preview while editing */}
                             {costUzs && costUzs > 0 && (
                               <div className="rounded bg-[#18181b] p-2 space-y-1 text-[10px]">
@@ -648,6 +664,14 @@ function ProductDetailModal({ product, onClose, metaMap }: { product: any | null
                                 <span className={cn("text-xs font-bold", margin >= 0 ? "text-[#10b981]" : "text-[#ef4444]")}>Marja {margin.toFixed(1)}%</span>
                               )}
                             </div>
+                            {m?.xid ? (
+                              <div className="rounded bg-[#18181b] border border-[#27272a] px-2 py-1.5">
+                                <p className="text-[10px] text-[#52525b]">SKU XID</p>
+                                <p className="text-xs font-mono text-white truncate">{m.xid}</p>
+                              </div>
+                            ) : (
+                              <button onClick={() => setEditing(true)} className="text-[11px] font-medium text-[#f59e0b] hover:underline">SKU XID kiritish</button>
+                            )}
                             {/* Net profit breakdown when not editing */}
                             {costUzs && costUzs > 0 && (
                               <div className="rounded bg-[#0a0a0f] p-2 space-y-1 text-[10px]">
@@ -672,24 +696,18 @@ function ProductDetailModal({ product, onClose, metaMap }: { product: any | null
                   })}
                 </div>
 
-                {/* Article + XID (product-level) */}
+                {/* Article (product-level) */}
                 {editing ? (
-                  <div className="grid grid-cols-2 gap-2 mt-2.5">
+                  <div className="mt-2.5">
                     <div>
                       <label className="block text-[11px] text-[#71717a] mb-1">Article kod</label>
                       <input value={article} onChange={(e) => setArticle(e.target.value)} placeholder="ART-001"
                         className="w-full h-9 px-3 rounded-lg bg-[#18181b] border border-[#27272a] text-sm text-white placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6] font-mono" />
                     </div>
-                    <div>
-                      <label className="block text-[11px] text-[#71717a] mb-1">XID</label>
-                      <input value={xid} onChange={(e) => setXid(e.target.value)} placeholder="XID-123"
-                        className="w-full h-9 px-3 rounded-lg bg-[#18181b] border border-[#27272a] text-sm text-white placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6] font-mono" />
-                    </div>
                   </div>
-                ) : (article || xid) ? (
-                  <div className="grid grid-cols-2 gap-2 mt-2">
+                ) : article ? (
+                  <div className="mt-2">
                     {article && <div className="rounded-lg bg-[#0f0f16] border border-[#1c1c24] px-3 py-2"><p className="text-[10px] text-[#52525b]">Article</p><p className="text-xs font-mono text-white">{article}</p></div>}
-                    {xid && <div className="rounded-lg bg-[#0f0f16] border border-[#1c1c24] px-3 py-2"><p className="text-[10px] text-[#52525b]">XID</p><p className="text-xs font-mono text-white">{xid}</p></div>}
                   </div>
                 ) : null}
 
@@ -727,24 +745,26 @@ function ProductDetailModal({ product, onClose, metaMap }: { product: any | null
 }
 
 export default function ProductsPage() {
+  const storeId = useAuthStore((state) => state.activeStoreId);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("ALL");
-  const [sortBy, setSortBy] = useState<SortByOption>("DEFAULT");
-  const [order, setOrder] = useState<"ASC" | "DESC">("ASC");
+  const [missingCost, setMissingCost] = useState(false);
+  const [missingXid, setMissingXid] = useState(false);
+  const [sortBy, setSortBy] = useState<SortByOption>("CREATED_AND_TITLE");
+  const [order, setOrder] = useState<"ASC" | "DESC">("DESC");
   const [view, setView] = useState<ViewMode>("grid");
   const [page, setPage] = useState(0);
-  const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<ProductRow | null>(null);
   const pageSize = 24;
+  useEffect(() => { setSelectedProduct(null); setPage(0); }, [storeId]);
 
   // Persist view mode + order
   useEffect(() => {
     const v = localStorage.getItem("products-view");
     if (v === "list" || v === "grid") setView(v);
-    const o = localStorage.getItem("products-order");
-    if (o === "ASC" || o === "DESC") setOrder(o);
+    localStorage.removeItem("products-order");
   }, []);
   useEffect(() => { localStorage.setItem("products-view", view); }, [view]);
-  useEffect(() => { localStorage.setItem("products-order", order); }, [order]);
 
   const { data: syncStatus } = useSyncStatus();
   const isConnected = syncStatus?.isConnected;
@@ -752,86 +772,66 @@ export default function ProductsPage() {
   // Seller-entered overrides (cost price, article, XID) keyed by skuId
   const { data: metaMap } = useProductMeta();
 
-  // Whether the user is searching. In search mode we fetch a large batch ONCE
-  // (no server search) and filter fully client-side so custom Article/XID also
-  // match — Uzum's server search only knows name/SKU.
+  // Debounce server-side search; metadata matching runs before pagination.
+  const [deferredSearch, setDeferredSearch] = useState('');
+  useEffect(() => { const timer = setTimeout(() => setDeferredSearch(search), 300); return () => clearTimeout(timer); }, [search]);
   const searching = search.trim().length > 0;
-
-  // First call: just to get total (size=1 keeps it cheap). No search → real total.
-  const { data: meta, isLoading: metaLoading, isError: metaError, refetch: refetchMeta } =
-    useLiveProducts({ page: 0, size: 1, filter, sortBy });
-  const total = meta?.total || 0;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  // Uzum API doesn't honor `order` param — flip pagination client-side for ASC
-  const effectivePage = order === "ASC" ? Math.max(0, totalPages - 1 - page) : page;
-
-  // In ASC (default) non-search mode the real page index depends on `total`, so
-  // wait for the cheap meta call before fetching the list — this avoids a wasted
-  // page-0 request on every visit (which also added rate-limit pressure).
-  const needsMeta = !searching && order === "ASC";
-  const mainEnabled = !needsMeta || meta !== undefined;
+  useEffect(() => {
+    if ((searching || missingCost || missingXid) && (sortBy === 'ROI' || sortBy === 'CONVERSION')) setSortBy('CREATED_AND_TITLE');
+  }, [searching, missingCost, missingXid, sortBy]);
 
   const { data, isLoading, isFetching, isError, refetch } = useLiveProducts({
-    page: searching ? 0 : effectivePage,
-    size: searching ? Math.min(2000, Math.max(total, 100)) : pageSize,
+    page,
+    size: pageSize,
+    search: deferredSearch.trim() || undefined,
+    costFilter: missingCost ? 'MISSING' : undefined,
+    xidFilter: missingXid ? 'MISSING' : undefined,
     filter,
     sortBy,
-  }, mainEnabled);
+    order,
+  });
 
-  const showLoading = (metaLoading && !meta) || isLoading || (!mainEnabled && !metaError);
-  const showError = (isError || metaError) && !data;
-  const retryAll = () => { refetchMeta(); refetch(); };
+  const total = data?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const showLoading = isLoading;
+  const showError = isError && !data;
+  const retryAll = () => { refetch(); };
 
   const products = useMemo(() => {
     const list = data?.products || [];
-    if (searching) return list; // order handled after filtering
-    return order === "ASC" ? [...list].reverse() : list;
-  }, [data?.products, order, searching]);
+    return list;
+  }, [data?.products]);
 
   const allRows = useMemo(() => {
-    return products.map((p: any) => {
+    return products.map((p): ProductRow => {
       const sku = p.skuList?.[0] || {};
       return {
-        productId: p.productId,
+        productId: p.productId ?? "",
         skuId: sku.skuId,
         title: p.title || sku.productTitle || "Nomsiz",
         category: p.category || "—",
         image: getImageUrl(p),
-        price: sku.price || 0,
-        quantityActive: sku.quantityActive ?? p.quantityActive ?? 0,
-        quantityFbs: sku.quantityFbs ?? p.quantityFbs ?? 0,
-        quantitySold: sku.quantitySold ?? 0,
-        quantityReturned: sku.quantityReturned ?? 0,
+        price: Number(sku.price) || 0,
+        quantityActive: Number(sku.quantityActive ?? p.quantityActive) || 0,
+        quantityFbs: Number(sku.quantityFbs ?? p.quantityFbs) || 0,
+        quantitySold: Number(sku.quantitySold) || 0,
+        quantityReturned: Number(sku.quantityReturned) || 0,
         statusValue: p.status?.value || "ACTIVE",
         statusTitle: p.status?.title,
-        rating: parseFloat(p.rating) || 0,
+        rating: Number(p.rating) || 0,
         feedbackQuantity: p.feedbackQuantity || 0,
-        commission: p.commissionDto?.minCommission ?? 0,
+        commission: Number(p.commissionDto?.minCommission) || 0,
         rank: sku.rankInfo?.rank || "N",
         skuCount: p.skuList?.length || 0,
         barcode: sku.barcode,
         skuTitle: sku.skuTitle,
-        meta: metaMap?.[sku.skuId],
+        meta: metaMap?.[String(sku.skuId ?? "")],
         _raw: p,
       };
     });
   }, [products, metaMap]);
 
-  // Client-side search across name, SKU, barcode, Article code and XID
-  const rows = useMemo(() => {
-    if (!searching) return allRows;
-    const q = search.trim().toLowerCase();
-    return allRows.filter((r: any) =>
-      (r.title || "").toLowerCase().includes(q) ||
-      String(r.skuId || "").toLowerCase().includes(q) ||
-      String(r.productId || "").toLowerCase().includes(q) ||
-      (r.skuTitle || "").toLowerCase().includes(q) ||
-      String(r.barcode || "").toLowerCase().includes(q) ||
-      (r.meta?.articleCode || "").toLowerCase().includes(q) ||
-      (r.meta?.xid || "").toLowerCase().includes(q),
-    );
-  }, [allRows, searching, search]);
+  const rows = allRows;
 
   const totalSold = rows.reduce((s, r) => s + r.quantitySold, 0);
   const avgCommission = rows.length
@@ -865,6 +865,8 @@ export default function ProductsPage() {
           </button>
         }
       />
+
+      <SmartupProductCheck onFindProduct={(id) => { setSearch(id); setPage(0); setFilter("ALL"); }} />
 
       {/* KPIs */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
@@ -902,7 +904,7 @@ export default function ProductsPage() {
               type="text"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-              placeholder="Mahsulot nomi yoki SKU bo'yicha qidirish..."
+              placeholder="Nomi, SKU, shtrix-kod, artikul yoki XID bo'yicha..."
               className="w-full h-10 pl-10 pr-3 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-white placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6] focus:ring-1 focus:ring-[#8b5cf6]/30"
             />
           </div>
@@ -915,7 +917,7 @@ export default function ProductsPage() {
                 onChange={(e) => { setSortBy(e.target.value as SortByOption); setPage(0); }}
                 className="h-10 pl-9 pr-8 rounded-xl bg-[#18181b] border border-[#27272a] text-sm text-white appearance-none cursor-pointer hover:border-[#3f3f46] focus:outline-none focus:border-[#8b5cf6]"
               >
-                {sortOptions.map((opt) => (
+                {sortOptions.filter((opt) => !(searching || missingCost || missingXid) || !['ROI', 'CONVERSION'].includes(opt.id)).map((opt) => (
                   <option key={opt.id} value={opt.id} className="bg-[#0f0f16]">{opt.label}</option>
                 ))}
               </select>
@@ -929,12 +931,12 @@ export default function ProductsPage() {
               {order === "ASC" ? (
                 <>
                   <ArrowUp className="w-3.5 h-3.5 text-[#8b5cf6]" />
-                  <span className="hidden md:inline">Oxiridan</span>
+                  <span className="hidden md:inline">O'sish</span>
                 </>
               ) : (
                 <>
                   <ArrowDown className="w-3.5 h-3.5 text-[#8b5cf6]" />
-                  <span className="hidden md:inline">Boshidan</span>
+                  <span className="hidden md:inline">Kamayish</span>
                 </>
               )}
             </button>
@@ -963,6 +965,39 @@ export default function ProductsPage() {
               <ListIcon className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2" aria-label="Mahalliy ma'lumotlar filtrlari">
+          <button
+            type="button"
+            aria-pressed={missingCost}
+            onClick={() => { setMissingCost((value) => !value); setPage(0); }}
+            className={cn(
+              "inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors",
+              missingCost
+                ? "border-[#8b5cf6]/60 bg-[#8b5cf6]/15 text-[#c4b5fd]"
+                : "border-[#27272a] bg-[#18181b] text-[#a1a1aa] hover:border-[#3f3f46] hover:text-white",
+            )}
+          >
+            <Wallet className="h-3.5 w-3.5" />
+            Tan narxi yo‘q
+            <span className="hidden text-[10px] font-normal opacity-70 sm:inline">kamida bitta SKU’da</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={missingXid}
+            onClick={() => { setMissingXid((value) => !value); setPage(0); }}
+            className={cn(
+              "inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium transition-colors",
+              missingXid
+                ? "border-[#f59e0b]/60 bg-[#f59e0b]/15 text-[#fbbf24]"
+                : "border-[#27272a] bg-[#18181b] text-[#a1a1aa] hover:border-[#3f3f46] hover:text-white",
+            )}
+          >
+            <Fingerprint className="h-3.5 w-3.5" />
+            XID yo‘q
+            <span className="hidden text-[10px] font-normal opacity-70 sm:inline">kamida bitta SKU’da</span>
+          </button>
         </div>
 
         {/* Filter chips */}
@@ -1036,7 +1071,7 @@ export default function ProductsPage() {
       )}
 
       {/* Pagination */}
-      {!searching && totalPages > 1 && (
+      {totalPages > 1 && (
         <div className="flex items-center justify-between pt-2">
           <p className="text-xs text-[#52525b]">
             Sahifa <span className="text-white font-medium">{page + 1}</span> / {totalPages} · Jami {total} ta

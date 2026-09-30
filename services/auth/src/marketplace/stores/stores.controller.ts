@@ -2,7 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, UseGuards } from '@n
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { StoresService } from './stores.service';
-import { ConnectStoreDto, UpdateConnectionDto, CreateStoreDto } from './dto/stores.dto';
+import { ConnectStoreDto, UpdateConnectionDto, UpdateSmartupSettingsDto } from './dto/stores.dto';
 
 @Controller('marketplace/stores')
 @UseGuards(JwtAuthGuard)
@@ -45,5 +45,19 @@ export class StoresController {
     @Body() dto: UpdateConnectionDto,
   ) {
     return this.storesService.updateConnectionSettings(userId, storeId, dto);
+  }
+
+  @Get(':storeId/smartup-settings')
+  getSmartupSettings(@CurrentUser('id') userId: string, @Param('storeId') storeId: string) {
+    return this.storesService.getSmartupSettings(userId, storeId);
+  }
+
+  @Patch(':storeId/smartup-settings')
+  updateSmartupSettings(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: UpdateSmartupSettingsDto,
+  ) {
+    return this.storesService.updateSmartupSettings(userId, storeId, dto);
   }
 }

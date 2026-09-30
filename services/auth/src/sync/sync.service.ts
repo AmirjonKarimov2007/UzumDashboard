@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../common/database/prisma.service';
 import { StoresService } from '../marketplace/stores/stores.service';
+import { RequestCache } from '../common/utils/request-cache';
 
 export const SYNC_QUEUE = 'sync';
 
@@ -27,6 +28,7 @@ export interface SyncJobData {
 
 @Injectable()
 export class SyncService {
+  private readonly queueReads = new RequestCache(1);
   private readonly logger = new Logger(SyncService.name);
 
   constructor(
@@ -100,25 +102,28 @@ export class SyncService {
   }
 
   async getSyncStatus(storeId: string) {
-    const conn = await this.storesService.getConnectionInfo(storeId);
-    const recentLogs = await this.prisma.syncLog.findMany({
-      where: { storeId },
-      orderBy: { startedAt: 'desc' },
-      take: 10,
-    });
+    const [conn, recentLogs] = await Promise.all([
+      this.storesService.getConnectionInfo(storeId),
+      this.prisma.syncLog.findMany({ where: { storeId }, orderBy: { startedAt: 'desc' }, take: 10 }),
+    ]);
 
     // Queue inspection — guarded; failures shouldn't break status response
     let queuedJobs = 0;
     let activeJobs = 0;
+    let queueStatusAvailable = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      const [waiting, active] = await Promise.all([
-        this.syncQueue.getWaiting(),
-        this.syncQueue.getActive(),
+      const [waiting, active] = await Promise.race([
+        this.queueReads.get('queue', 5_000, () => Promise.all([this.syncQueue.getWaiting(), this.syncQueue.getActive()])),
+        new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('Queue status timed out')), 750); }),
       ]);
       queuedJobs = waiting.filter((j) => (j.data as SyncJobData).storeId === storeId).length;
       activeJobs = active.filter((j) => (j.data as SyncJobData).storeId === storeId).length;
+      queueStatusAvailable = true;
     } catch (err) {
       this.logger.warn(`Queue inspection failed: ${(err as Error).message}`);
+    } finally {
+      if (deadline) clearTimeout(deadline);
     }
 
     return {
@@ -132,6 +137,7 @@ export class SyncService {
       uzumShopId: conn?.uzumShopId,
       queuedJobs,
       activeJobs,
+      queueStatusAvailable,
       recentLogs,
     };
   }

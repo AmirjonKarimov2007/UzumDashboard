@@ -18,6 +18,7 @@ import { useProductAnalytics, type ProductAnalyticsRow } from "@/hooks/use-produ
 import { useSyncStatus } from "@/hooks/use-sync";
 import { useDashboardStore } from "@/stores/dashboard-store";
 import { formatMoney, usdToUzs } from "@/lib/currency";
+import { productImageUrl } from "@/lib/uzum-image";
 
 const timeRanges = [
   { id: "today",   label: "Bugun" },
@@ -381,7 +382,7 @@ export default function AnalyticsPage() {
                     <div className="w-10 h-10 rounded-lg bg-[#18181b] overflow-hidden flex items-center justify-center ring-1 ring-[#27272a] flex-shrink-0">
                       {p.image ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={p.image} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        <img src={productImageUrl(p.image, "thumb") || ""} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                       ) : (
                         <Package className="w-4 h-4 text-[#3f3f46]" />
                       )}
@@ -562,7 +563,7 @@ function SoldProductsPeriodSection({
                       <div className="w-10 h-10 rounded-lg bg-[#18181b] overflow-hidden flex items-center justify-center ring-1 ring-[#27272a] flex-shrink-0">
                         {product.image ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={product.image} alt={product.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <img src={productImageUrl(product.image, "thumb") || ""} alt={product.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         ) : <Package className="w-4 h-4 text-[#3f3f46]" />}
                       </div>
                       <div className="min-w-0">
@@ -610,7 +611,17 @@ function ProductAnalyticsSection({
     const list = (data?.products ?? []).filter((p) => {
       const q = search.trim().toLowerCase();
       if (!q) return true;
-      return p.title.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || String(p.productId).includes(q);
+      return (
+        p.title.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        String(p.productId).includes(q) ||
+        p.skus?.some((sku) =>
+          sku.title.toLowerCase().includes(q) ||
+          String(sku.skuId).includes(q) ||
+          String(sku.barcode || "").toLowerCase().includes(q) ||
+          String(sku.article || "").toLowerCase().includes(q)
+        )
+      );
     });
     const key = (p: ProductAnalyticsRow) => {
       switch (sort) {
@@ -792,7 +803,7 @@ function ProductAnalyticsSection({
           <table className="w-full min-w-[820px] text-sm">
             <thead>
               <tr className="text-[11px] font-semibold text-[#52525b] uppercase tracking-wider border-b border-[#18181b]">
-                <th className="text-left px-5 py-2.5 font-semibold">Mahsulot</th>
+                <th className="text-left px-5 py-2.5 font-semibold">Mahsulot / SKU</th>
                 <th className="text-right px-3 py-2.5 font-semibold">Ko'rish</th>
                 <th className="text-right px-3 py-2.5 font-semibold">Sotilgan</th>
                 <th className="text-right px-3 py-2.5 font-semibold">Konv.</th>
@@ -803,22 +814,41 @@ function ProductAnalyticsSection({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#18181b]">
-              {rows.slice(0, 100).map((p) => (
+              {rows.slice(0, 100).map((p) => {
+                const visibleSkus = (p.skus || []).slice(0, 4);
+                const hiddenSkuCount = Math.max(0, (p.skus?.length || 0) - visibleSkus.length);
+                return (
                 <tr key={p.productId} className="hover:bg-[#18181b]/40 transition-colors">
                   <td className="px-5 py-3">
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-start gap-3 min-w-0">
                       <div className="w-9 h-9 rounded-lg bg-[#18181b] overflow-hidden flex items-center justify-center ring-1 ring-[#27272a] flex-shrink-0">
                         {p.image ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={p.image} alt={p.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <img src={productImageUrl(p.image, "thumb") || ""} alt={p.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         ) : <Package className="w-4 h-4 text-[#3f3f46]" />}
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-white truncate max-w-[260px]" title={p.title}>{p.title || "Nomsiz"}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-white whitespace-normal leading-snug max-w-[420px]" title={p.title}>{p.title || "Nomsiz"}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <span className="text-[10px] px-1.5 py-0.5 rounded font-bold" style={{ background: `${RANK_COLORS[p.rank] || "#71717a"}1f`, color: RANK_COLORS[p.rank] || "#71717a" }}>{p.rank}</span>
-                          <span className="text-[10px] text-[#52525b] truncate max-w-[140px]">{p.category}</span>
+                          <span className="text-[10px] text-[#52525b] truncate max-w-[180px]">{p.category}</span>
+                          <span className="text-[10px] text-[#71717a]">{p.skuCount} SKU</span>
                         </div>
+                        {visibleSkus.length > 0 && (
+                          <div className="mt-2 space-y-1">
+                            {visibleSkus.map((sku) => (
+                              <div key={sku.skuId} className="flex items-center gap-2 text-[11px] leading-4">
+                                <span className="min-w-10 text-right font-bold tabular-nums text-[#10b981]">{fmtNum2(sku.sold)}</span>
+                                <span className="text-[#71717a]">dona</span>
+                                <span className="text-[#a1a1aa] whitespace-normal break-words max-w-[360px]">{sku.title || `SKU ${sku.skuId}`}</span>
+                                {sku.article && <span className="hidden lg:inline text-[10px] px-1.5 py-0.5 rounded bg-[#18181b] text-[#71717a] font-mono">{sku.article}</span>}
+                              </div>
+                            ))}
+                            {hiddenSkuCount > 0 && (
+                              <p className="text-[10px] text-[#52525b] pl-12">+{hiddenSkuCount} ta SKU</p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -838,7 +868,8 @@ function ProductAnalyticsSection({
                   </td>
                   <td className="px-5 py-3 text-right tabular-nums font-semibold text-white">{fmtMoney(p.turnover)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

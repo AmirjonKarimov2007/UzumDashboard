@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Param, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { StoreOwnerGuard } from '../common/guards/store-owner.guard';
 import { SyncService, SyncJobType } from './sync.service';
 
 @Controller('marketplace/stores/:storeId/sync')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, StoreOwnerGuard)
 export class SyncController {
   constructor(private readonly syncService: SyncService) {}
 

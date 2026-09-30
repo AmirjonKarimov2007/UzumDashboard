@@ -8,14 +8,17 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../common/database/prisma.service';
 import { OtpService } from '../../otp/otp.service';
 import { SessionService } from '../../sessions/sessions.service';
-import { SmsService } from '../../sms/sms.service';
+import { TelegramBotService } from '../../marketplace/telegram/telegram-bot.service';
 import {
   SendOtpDto,
   VerifyOtpDto,
   TelegramLoginDto,
+  TelegramWidgetLoginDto,
+  PasswordLoginDto,
   RefreshTokenDto,
   LogoutDto,
 } from '../dto/auth.dto';
@@ -28,14 +31,23 @@ export class AuthService {
     private config: ConfigService,
     private otpService: OtpService,
     private sessionService: SessionService,
-    private smsService: SmsService,
+    private telegramBot: TelegramBotService,
   ) {}
 
   /**
-   * Send OTP to phone number for login/registration
+   * Send a Telegram OTP to an existing account
    */
-  async sendOtp(dto: SendOtpDto): Promise<{ message: string; expiresAt: Date }> {
-    const { phone } = dto;
+  async sendOtp(dto: SendOtpDto): Promise<{
+    message: string;
+    expiresAt: Date;
+    resendAfterSeconds: number;
+    devCode?: string;
+    devMode?: boolean;
+  }> {
+    const phone = this.normalizePhone(dto.phone);
+    const localConsoleOtp =
+      this.config.get<string>('NODE_ENV') === 'development' &&
+      this.config.get<string>('SMS_PROVIDER') === 'console';
 
     // Validate phone format (Uzbek format)
     const phoneRegex = /^\+998\d{9}$/;
@@ -43,20 +55,28 @@ export class AuthService {
       throw new BadRequestException('Invalid phone number format. Use +998XXXXXXXXX');
     }
 
-    // Check if user exists
-    const user = await this.prisma.user.findUnique({
-      where: { phone },
+    const user = await this.prisma.user.findFirst({
+      where: { phone: { in: this.phoneCandidates(phone) } },
+      include: { telegramUser: true },
     });
+    if (!user) throw new NotFoundException('Bunday account mavjud emas');
+    if (!user.isActive) throw new UnauthorizedException('Account bloklangan');
+    if (!localConsoleOtp && (!user.telegramUser?.isActive || !user.telegramUser.chatId)) {
+      throw new BadRequestException('Bu accountga Telegram raqami ulanmagan');
+    }
 
-    // Generate OTP
-    const { code, expiresAt } = await this.otpService.generateOtp(phone, user?.id);
+    const { code, expiresAt, resendAfterSeconds } = await this.otpService.generateOtp(phone, user.id);
 
-    // Send SMS
-    try {
-      await this.smsService.sendOtp(phone, code, user?.name ?? undefined);
-    } catch (error) {
-      console.error('Failed to send SMS:', error);
-      // Don't fail OTP generation if SMS fails (for demo purposes)
+    if (!localConsoleOtp) {
+      try {
+        await this.telegramBot.sendLoginCode(user.telegramUser!.chatId, code, expiresAt);
+      } catch (error) {
+        await this.prisma.otp.updateMany({
+          where: { phone, verified: false },
+          data: { expiresAt: new Date() },
+        });
+        throw new BadRequestException('Telegramga kod yuborib bo‘lmadi. Bot bloklanmaganini tekshiring.');
+      }
     }
 
     // Create audit log
@@ -66,54 +86,52 @@ export class AuthService {
         userId: user?.id,
         entity: 'User',
         entityId: user?.id,
-        metadata: { phone },
+        metadata: { phone, channel: localConsoleOtp ? 'development-console' : 'telegram' },
       },
     });
 
-    // In dev/console mode, return code so frontend can show it (no real SMS provider)
-    const smsProvider = this.config.get<string>('SMS_PROVIDER') || 'console';
-    const devCode = smsProvider === 'console' ? code : undefined;
-
     return {
-      message: 'OTP sent successfully',
+      message: localConsoleOtp
+        ? 'Lokal test kodi yaratildi'
+        : 'Kirish kodi Telegramga yuborildi',
       expiresAt,
-      ...(devCode ? { devCode, devMode: true } : {}),
+      resendAfterSeconds,
+      ...(localConsoleOtp ? { devCode: code, devMode: true } : {}),
     };
   }
 
   /**
-   * Verify OTP and login/register user
+   * Verify OTP and log in an existing user
    */
   async verifyOtp(dto: VerifyOtpDto): Promise<{
     user: any;
     accessToken: string;
     refreshToken: string;
   }> {
-    const { phone, code, device, ipAddress, userAgent } = dto;
+    const phone = this.normalizePhone(dto.phone);
+    const { code, device, ipAddress, userAgent } = dto;
 
     // Verify OTP
     const otpRecord = await this.otpService.verifyOtp(phone, code);
 
-    // Get or create user
-    let user = await this.prisma.user.findUnique({
-      where: { phone },
-    });
+    const user = otpRecord.userId
+      ? await this.prisma.user.findUnique({ where: { id: otpRecord.userId } })
+      : await this.prisma.user.findFirst({
+        where: { phone: { in: this.phoneCandidates(phone) } },
+      });
 
     if (!user) {
-      // Create new user
-      user = await this.prisma.user.create({
-        data: {
-          phone,
-          isActive: true,
-        },
-      });
+      throw new NotFoundException('Bunday account mavjud emas');
+    }
+
+    if (!this.phoneCandidates(phone).includes(user.phone)) {
+      throw new UnauthorizedException('Kod boshqa account uchun yaratilgan');
     }
 
     if (!user.isActive) {
-      throw new UnauthorizedException('Account is deactivated');
+      throw new UnauthorizedException('Account bloklangan');
     }
 
-    // Ensure user has at least one store (idempotent — runs for new AND existing users)
     const storeCount = await this.prisma.store.count({ where: { userId: user.id } });
     if (storeCount === 0) {
       await this.prisma.store.create({
@@ -126,59 +144,16 @@ export class AuthService {
       });
     }
 
-    // Generate tokens
-    const { accessToken, refreshToken } = await this.generateTokens(user);
-
-    // Create session
-    await this.sessionService.createSession({
-      userId: user.id,
-      token: refreshToken,
-      device,
-      ipAddress,
-      userAgent,
-    });
-
-    // Save refresh token to database
-    await this.prisma.refreshToken.create({
-      data: {
-        token: refreshToken,
-        userId: user.id,
-        expiresAt: new Date(
-          Date.now() +
-            this.parseDuration(this.config.get<string>('jwt.refreshTokenExpiresIn') ?? '7d'),
-        ),
-      },
-    });
-
-    // Audit log
     await this.prisma.auditLog.create({
       data: {
         action: 'USER_LOGGED_IN',
         userId: user.id,
         entity: 'User',
         entityId: user.id,
-        metadata: { phone, device },
+        metadata: { phone, device, via: 'telegram_otp' },
       },
     });
-
-    // Return user data with stores
-    const userWithStores = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      include: { stores: true },
-    });
-
-    return {
-      user: {
-        id: userWithStores!.id,
-        phone: userWithStores!.phone,
-        email: userWithStores!.email,
-        name: userWithStores!.name,
-        avatar: userWithStores!.avatar,
-        stores: userWithStores!.stores,
-      },
-      accessToken,
-      refreshToken,
-    };
+    return this.finalizeLogin(user.id, { device, ipAddress, userAgent });
   }
 
   /**
@@ -265,12 +240,76 @@ export class AuthService {
     });
   }
 
+  /** Telegram Login Widget orqali oddiy brauzerdan kirish. Telegram imzosi
+   * serverda tekshiriladi; faqat botda kontaktini ulagan akkauntlar kiradi. */
+  async loginWithTelegramWidget(dto: TelegramWidgetLoginDto): Promise<{
+    user: any;
+    accessToken: string;
+    refreshToken: string;
+  }> {
+    if (!this.validateTelegramWidgetData(dto)) {
+      throw new UnauthorizedException('Telegram tasdiqlashi yaroqsiz yoki eskirgan');
+    }
+    const telegramId = String(dto.id);
+    const link = await this.prisma.telegramUser.findFirst({
+      where: { chatId: telegramId, isActive: true },
+      include: { user: true },
+    });
+    if (!link) throw new NotFoundException('telegram_not_linked');
+    if (!link.user.isActive) throw new UnauthorizedException('Account is deactivated');
+
+    await this.prisma.telegramUser.update({
+      where: { id: link.id },
+      data: {
+        username: dto.username ?? null,
+        firstName: dto.first_name,
+        lastName: dto.last_name ?? null,
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'USER_LOGGED_IN',
+        userId: link.userId,
+        entity: 'User',
+        entityId: link.userId,
+        metadata: { via: 'telegram_widget', telegramId },
+      },
+    });
+    return this.finalizeLogin(link.userId, { device: { type: 'telegram-widget' } });
+  }
+
+  /** Super-admin o‘rnatgan parol bilan zaxira kirish. Yangi akkaunt bu endpoint
+   * orqali ochilmaydi — ro‘yxatdan o‘tish Telegram botda tasdiqlanadi. */
+  async loginWithPassword(dto: PasswordLoginDto): Promise<{
+    user: any;
+    accessToken: string;
+    refreshToken: string;
+  }> {
+    const digits = dto.phone.replace(/\D/g, '');
+    const candidates = [...new Set([dto.phone.trim(), digits, digits ? `+${digits}` : ''].filter(Boolean))];
+    const user = await this.prisma.user.findFirst({ where: { phone: { in: candidates } } });
+    if (!user?.password || !(await bcrypt.compare(dto.password, user.password))) {
+      throw new UnauthorizedException('Telefon yoki parol noto‘g‘ri');
+    }
+    if (!user.isActive) throw new UnauthorizedException('Account is deactivated');
+    await this.prisma.auditLog.create({
+      data: {
+        action: 'USER_LOGGED_IN',
+        userId: user.id,
+        entity: 'User',
+        entityId: user.id,
+        metadata: { via: 'password' },
+      },
+    });
+    return this.finalizeLogin(user.id, { device: { type: 'password' } });
+  }
+
   /**
    * Telegram WebApp orqali kirgan foydalanuvchi qaysi akkauntga ulanishini
    * aniqlaydi (telefon so'ramasdan):
    *  - TELEGRAM_ADMIN_ID bilan mos kelsa → egasi akkaunti (do'koni bor eng eski
    *    foydalanuvchi, bo'lmasa eng eski, bo'lmasa yangi akkaunt yaratiladi);
-   *  - tizimda atigi 1 foydalanuvchi bo'lsa → o'sha (aniq egasi);
+   *  - yagona akkaunt bo‘lsa ham noma’lum Telegram foydalanuvchi telefonini tasdiqlaydi;
    *  - aks holda null (noma'lum foydalanuvchi → telefon orqali kirish).
    */
   private async resolveTelegramOwner(tgUser: any): Promise<string | null> {
@@ -290,13 +329,8 @@ export class AuthService {
       return created.id;
     }
 
-    // Yagona foydalanuvchili tizim — o'sha foydalanuvchi egasi
-    const count = await this.prisma.user.count();
-    if (count === 1) {
-      const only = await this.prisma.user.findFirst();
-      return only?.id ?? null;
-    }
-
+    // An unlinked Telegram identity must verify a phone even in a single-user
+    // deployment. Otherwise anyone could sign into the super-admin account.
     return null;
   }
 
@@ -346,6 +380,30 @@ export class AuthService {
     }
   }
 
+  private validateTelegramWidgetData(dto: TelegramWidgetLoginDto): boolean {
+    const botToken = this.config.get<string>('TELEGRAM_BOT_TOKEN') || process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken || !dto.hash || !dto.auth_date) return false;
+    if (Math.abs(Date.now() / 1000 - dto.auth_date) > 86_400) return false;
+    const fields: Record<string, string | number | undefined> = {
+      auth_date: dto.auth_date,
+      first_name: dto.first_name,
+      id: dto.id,
+      last_name: dto.last_name,
+      photo_url: dto.photo_url,
+      username: dto.username,
+    };
+    const dataCheckString = Object.entries(fields)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+    const secret = crypto.createHash('sha256').update(botToken).digest();
+    const computed = crypto.createHmac('sha256', secret).update(dataCheckString).digest();
+    let received: Buffer;
+    try { received = Buffer.from(dto.hash, 'hex'); } catch { return false; }
+    return received.length === computed.length && crypto.timingSafeEqual(received, computed);
+  }
+
   /** Token + sessiya + refresh-token yaratib, to'liq login javobini qaytaradi
    *  (verifyOtp va loginWithTelegram uchun umumiy). */
   private async finalizeLogin(
@@ -357,6 +415,7 @@ export class AuthService {
       include: { stores: true },
     });
     if (!user) throw new UnauthorizedException('User not found');
+    if (!user.isActive) throw new UnauthorizedException('Account is deactivated');
 
     const { accessToken, refreshToken } = await this.generateTokens(user);
 
@@ -372,10 +431,7 @@ export class AuthService {
       data: {
         token: refreshToken,
         userId: user.id,
-        expiresAt: new Date(
-          Date.now() +
-            this.parseDuration(this.config.get<string>('jwt.refreshTokenExpiresIn') ?? '7d'),
-        ),
+        expiresAt: this.refreshExpiryDate(),
       },
     });
 
@@ -420,25 +476,21 @@ export class AuthService {
       throw new UnauthorizedException('Account is deactivated');
     }
 
-    // Revoke old refresh token
-    await this.prisma.refreshToken.update({
-      where: { id: tokenRecord.id },
-      data: { revoked: true },
-    });
-
-    // Generate new tokens
+    const previousSession = await this.sessionService.getSession(refreshToken);
     const tokens = await this.generateTokens(tokenRecord.user);
-
-    // Save new refresh token
-    await this.prisma.refreshToken.create({
-      data: {
-        token: tokens.refreshToken,
-        userId: tokenRecord.user.id,
-        expiresAt: new Date(
-          Date.now() +
-            this.parseDuration(this.config.get<string>('jwt.refreshTokenExpiresIn') ?? '7d'),
-        ),
-      },
+    await this.prisma.$transaction([
+      this.prisma.refreshToken.update({ where: { id: tokenRecord.id }, data: { revoked: true } }),
+      this.prisma.refreshToken.create({
+        data: { token: tokens.refreshToken, userId: tokenRecord.user.id, expiresAt: this.refreshExpiryDate() },
+      }),
+    ]);
+    await this.sessionService.deleteSession(refreshToken);
+    await this.sessionService.createSession({
+      userId: tokenRecord.user.id,
+      token: tokens.refreshToken,
+      device: previousSession?.device,
+      ipAddress: previousSession?.ipAddress,
+      userAgent: previousSession?.userAgent,
     });
 
     // Audit log
@@ -558,10 +610,14 @@ export class AuthService {
    * Generate random refresh token
    */
   private generateRandomToken(): string {
-    return (
-      Math.random().toString(36).substring(2, 15) +
-      Math.random().toString(36).substring(2, 15)
-    );
+    return crypto.randomBytes(48).toString('base64url');
+  }
+
+  private refreshExpiryDate(): Date {
+    const configured = this.config.get<string>('REFRESH_TOKEN_EXPIRES_IN')
+      || this.config.get<string>('jwt.refreshTokenExpiresIn')
+      || '365d';
+    return new Date(Date.now() + this.parseDuration(configured));
   }
 
   /**
@@ -569,7 +625,7 @@ export class AuthService {
    */
   private parseDuration(duration: string): number {
     const match = duration.match(/^(\d+)([smhd])$/);
-    if (!match) return 7 * 24 * 60 * 60 * 1000; // Default 7 days
+    if (!match) return 365 * 24 * 60 * 60 * 1000;
 
     const value = parseInt(match[1], 10);
     const unit = match[2];
@@ -582,5 +638,15 @@ export class AuthService {
     };
 
     return value * (multipliers[unit as keyof typeof multipliers] || 1);
+  }
+
+  private normalizePhone(value: string): string {
+    const digits = value.replace(/\D/g, '');
+    return digits.startsWith('998') ? `+${digits}` : value.trim();
+  }
+
+  private phoneCandidates(value: string): string[] {
+    const digits = value.replace(/\D/g, '');
+    return [...new Set([value.trim(), digits, digits ? `+${digits}` : ''].filter(Boolean))];
   }
 }

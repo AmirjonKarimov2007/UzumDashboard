@@ -16,6 +16,7 @@ import {
 } from "@/hooks/use-returns";
 import { useDashboardStore } from "@/stores/dashboard-store";
 import { formatMoney, usdToUzs } from "@/lib/currency";
+import { productImageUrl } from "@/lib/uzum-image";
 
 const DAY = 86_400_000;
 function dayStart(ms: number) { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); }
@@ -149,7 +150,7 @@ export default function ReturnsPage() {
 
   const kpis = [
     { label: "Jami qaytarish", value: a ? `${a.totalItems} ta` : "—", sub: `${a?.totalQty ?? 0} dona`, icon: RotateCcw, color: "#8b5cf6" },
-    { label: "Qaytgan tovar qiymati", value: a ? fmtMoney(a.totalSaleValue) : "—", sub: "sotuv narxida", icon: DollarSign, color: "#3b82f6" },
+    { label: "Qaytgan tovar qiymati", value: a ? fmtCostUsd(a.totalReceivedCostUsd ?? 0) : "—", sub: "qabul qilingan tan narxda", icon: DollarSign, color: "#3b82f6" },
     { label: "Qaytarish foizi", value: a?.returnRate != null ? `${a.returnRate.toFixed(1)}%` : "—", sub: a ? `${a.soldQty} sotilgan` : "", icon: Percent, color: "#06b6d4" },
     { label: "Yo'qolgan", value: a ? `${a.lostItems} ta` : "—", sub: `${a?.lostQty ?? 0} dona`, icon: AlertTriangle, color: "#ef4444" },
     { label: "Yo'qolgan qiymat", value: a ? fmtCostUsd(a.lostCostUsd) : "—", sub: "tan narxda", icon: TrendingDown, color: "#f97316" },
@@ -500,11 +501,18 @@ function InvoiceDetailModal({ returnId, loading, invoice, onClose }: {
             <div className="py-16 text-center text-sm text-[#52525b]">Mahsulotlar topilmadi</div>
           ) : (
             <div className="divide-y divide-[#18181b]">
-              {invoice.returnItems.map((it, i) => (
+              {invoice.returnItems.map((it, i) => {
+                const image = productImageUrl(it, "thumb");
+                return (
                 <div key={it.id} className="px-4 sm:px-5 py-3 hover:bg-[#13131a] transition-colors">
                   <div className="flex items-start gap-3">
-                    <div className="w-7 h-7 rounded-lg bg-[#18181b] border border-[#27272a] flex items-center justify-center flex-shrink-0">
-                      <Package className="w-3.5 h-3.5 text-[#71717a]" />
+                    <div className="w-12 h-12 rounded-lg bg-[#18181b] border border-[#27272a] overflow-hidden flex items-center justify-center flex-shrink-0">
+                      {image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={image} alt={it.productTitle || ""} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <Package className="w-4 h-4 text-[#71717a]" />
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-white" title={it.productTitle || ""}>
@@ -524,7 +532,8 @@ function InvoiceDetailModal({ returnId, loading, invoice, onClose }: {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -538,6 +547,7 @@ function ReturnLine({ r, fmtMoney, fmtCostUsd }: {
 }) {
   const st = STATUS_CFG[r.status];
   const isLost = r.status === "LOST";
+  const image = productImageUrl(r.image, "thumb");
 
   return (
     <div className={cn("px-4 py-3 hover:bg-[#13131a] transition-colors", isLost && "bg-[#ef4444]/[0.04]")}>
@@ -547,7 +557,17 @@ function ReturnLine({ r, fmtMoney, fmtCostUsd }: {
           <p className="text-xs font-mono text-white truncate" title={r.publicId || r.returnId}>{r.publicId || "—"}</p>
           <p className="text-[10px] font-mono text-[#52525b] truncate" title={r.uzumOrderId}>{r.uzumOrderId}</p>
         </div>
-        <span className="text-xs text-white truncate" title={r.productName}>{r.productName}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-9 h-9 rounded-lg bg-[#18181b] overflow-hidden flex-shrink-0 flex items-center justify-center ring-1 ring-[#27272a]">
+            {image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={image} alt={r.productName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <Package className="w-4 h-4 text-[#3f3f46]" />
+            )}
+          </div>
+          <span className="text-xs text-white truncate" title={r.productName}>{r.productName}</span>
+        </div>
         <span className="text-[11px] font-mono text-[#71717a] truncate">{r.skuTitle || r.barcode || "—"}</span>
         <span className="text-[11px] text-[#71717a]">{fmtDate(r.orderedAt)}</span>
         <span className="text-[11px] text-[#a1a1aa]">{fmtDate(r.returnedAt)}</span>
@@ -562,10 +582,20 @@ function ReturnLine({ r, fmtMoney, fmtCostUsd }: {
       {/* Mobile card */}
       <div className="lg:hidden">
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
+          <div className="flex items-start gap-2 min-w-0">
+            <div className="w-11 h-11 rounded-lg bg-[#18181b] overflow-hidden flex-shrink-0 flex items-center justify-center ring-1 ring-[#27272a]">
+              {image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={image} alt={r.productName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <Package className="w-4 h-4 text-[#3f3f46]" />
+              )}
+            </div>
+            <div className="min-w-0">
             <p className="text-sm text-white truncate">{r.productName}</p>
             <p className="text-[11px] font-mono text-[#71717a] truncate">{r.skuTitle || r.barcode || "—"}</p>
             <p className="text-[10px] font-mono text-[#52525b] truncate">ID: {r.publicId || "—"} · {r.uzumOrderId}</p>
+            </div>
           </div>
           <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold flex-shrink-0" style={{ color: st.color, background: st.bg }}>{st.label}</span>
         </div>

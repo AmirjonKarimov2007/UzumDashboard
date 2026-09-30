@@ -19,6 +19,7 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UsersService } from '../users.service';
+import { isSuperAdmin } from '../../common/guards/super-admin.guard';
 
 export class UpdateProfileDto {
   @IsOptional()
@@ -58,6 +59,7 @@ export class UsersController {
       avatar: user.avatar,
       usdRate: user.usdRate,
       isActive: user.isActive,
+      isSuperAdmin: isSuperAdmin(user.phone),
       stores: user.stores,
     };
   }

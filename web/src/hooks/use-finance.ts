@@ -1,5 +1,5 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { financeApi } from '@/lib/api/finance';
 import { useAuthStore } from '@/stores/auth-store';
 
@@ -83,6 +83,12 @@ export interface LogisticsFinesResponse {
   marketingTotal: number;
   marketingCount: number;
   marketing: ExpenseItem[];
+  storageTotal: number;
+  storageCount: number;
+  storage: ExpenseItem[];
+  extensionTotal: number;
+  extensionCount: number;
+  extensions: ExpenseItem[];
   otherTotal: number;
   otherCount: number;
   other: ExpenseItem[];
@@ -98,11 +104,200 @@ export interface LogisticsFinesResponse {
 }
 
 export interface ProcessingWithdrawResponse {
-  processing: { total: number; count: number; itemsCount: number; apiTotal: number };
-  withdraw: { total: number; count: number; itemsCount: number; apiTotal: number };
+  processing: {
+    total: number;
+    grossAfterCommission: number;
+    netAfterLogistics: number;
+    logistics: number;
+    commission: number;
+    grossSales: number;
+    withdrawn: number;
+    count: number;
+    itemsCount: number;
+    apiTotal: number;
+    costUsd: number;
+    costedQty: number;
+    unpricedQty: number;
+    totalQty: number;
+    costCoveragePercent: number;
+  };
+  withdraw: {
+    total: number;
+    grossAfterCommission: number;
+    netAfterLogistics: number;
+    logistics: number;
+    commission: number;
+    grossSales: number;
+    withdrawn: number;
+    count: number;
+    itemsCount: number;
+    apiTotal: number;
+    historyGrossTotal: number;
+    historyWithdrawnTotal: number;
+    historyItemsCount: number;
+    costUsd: number;
+    costedQty: number;
+    unpricedQty: number;
+    totalQty: number;
+    costCoveragePercent: number;
+  };
   combined: number;
+  currentCostUsd: number;
   fbsActiveOrders: number;
   requestedSize: number;
+  calculatedAt: number;
+  formulas: {
+    processing: string;
+    available: string;
+    cost: string;
+  };
+}
+
+export interface ManualWithdrawalEntry {
+  id: string;
+  reference: string | null;
+  status: string;
+  amount: number;
+  occurredAt: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManualWithdrawalsResponse {
+  entries: ManualWithdrawalEntry[];
+  total: number;
+  count: number;
+}
+
+export type ManualWithdrawalInput = {
+  amount: number;
+  occurredAt: string;
+  reference?: string;
+  status?: string;
+  note?: string;
+};
+
+export function useManualWithdrawals(dateFrom?: number, dateTo?: number) {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  const queryKey = ['finance', 'manual-withdrawals', storeId, dateFrom, dateTo] as const;
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['finance', 'manual-withdrawals', storeId] });
+
+  const query = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const { apiClient } = await import('@/lib/api/client');
+      const { data } = await apiClient.get<ManualWithdrawalsResponse>(
+        `/marketplace/stores/${storeId}/finance/manual-withdrawals`,
+        { params: { ...(dateFrom != null ? { dateFrom } : {}), ...(dateTo != null ? { dateTo } : {}) } },
+      );
+      return data;
+    },
+    enabled: !!storeId,
+    staleTime: 30_000,
+  });
+
+  const create = useMutation({
+    mutationFn: async (input: ManualWithdrawalInput) => {
+      const { apiClient } = await import('@/lib/api/client');
+      const { data } = await apiClient.post(`/marketplace/stores/${storeId}/finance/manual-withdrawals`, input);
+      return data as ManualWithdrawalEntry;
+    },
+    onSuccess: invalidate,
+  });
+  const update = useMutation({
+    mutationFn: async ({ id, ...input }: ManualWithdrawalInput & { id: string }) => {
+      const { apiClient } = await import('@/lib/api/client');
+      const { data } = await apiClient.patch(`/marketplace/stores/${storeId}/finance/manual-withdrawals/${id}`, input);
+      return data as ManualWithdrawalEntry;
+    },
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const { apiClient } = await import('@/lib/api/client');
+      await apiClient.delete(`/marketplace/stores/${storeId}/finance/manual-withdrawals/${id}`);
+    },
+    onSuccess: invalidate,
+  });
+
+  return { ...query, create, update, remove };
+}
+
+export interface SupplierPaymentEntry {
+  id: string;
+  supplierName: string;
+  amount: number;
+  occurredAt: number;
+  paymentMethod: string | null;
+  reference: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupplierPaymentsResponse {
+  entries: SupplierPaymentEntry[];
+  total: number;
+  count: number;
+  bySupplier: Array<{ supplierName: string; amount: number }>;
+}
+
+export type SupplierPaymentInput = {
+  supplierName: string;
+  amount: number;
+  occurredAt: string;
+  paymentMethod?: string;
+  reference?: string;
+  note?: string;
+};
+
+export function useSupplierPayments(dateFrom?: number, dateTo?: number) {
+  const storeId = useActiveStoreId();
+  const queryClient = useQueryClient();
+  const queryKey = ['finance', 'supplier-payments', storeId, dateFrom, dateTo] as const;
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['finance', 'supplier-payments', storeId] });
+
+  const query = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const { apiClient } = await import('@/lib/api/client');
+      const { data } = await apiClient.get<SupplierPaymentsResponse>(
+        `/marketplace/stores/${storeId}/finance/supplier-payments`,
+        { params: { ...(dateFrom != null ? { dateFrom } : {}), ...(dateTo != null ? { dateTo } : {}) } },
+      );
+      return data;
+    },
+    enabled: !!storeId,
+    staleTime: 30_000,
+  });
+
+  const create = useMutation({
+    mutationFn: async (input: SupplierPaymentInput) => {
+      const { apiClient } = await import('@/lib/api/client');
+      const { data } = await apiClient.post(`/marketplace/stores/${storeId}/finance/supplier-payments`, input);
+      return data as SupplierPaymentEntry;
+    },
+    onSuccess: invalidate,
+  });
+  const update = useMutation({
+    mutationFn: async ({ id, ...input }: SupplierPaymentInput & { id: string }) => {
+      const { apiClient } = await import('@/lib/api/client');
+      const { data } = await apiClient.patch(`/marketplace/stores/${storeId}/finance/supplier-payments/${id}`, input);
+      return data as SupplierPaymentEntry;
+    },
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: async (id: string) => {
+      const { apiClient } = await import('@/lib/api/client');
+      await apiClient.delete(`/marketplace/stores/${storeId}/finance/supplier-payments/${id}`);
+    },
+    onSuccess: invalidate,
+  });
+
+  return { ...query, create, update, remove };
 }
 
 export interface DashboardSummaryResponse {
@@ -125,7 +320,7 @@ export interface DashboardSummaryResponse {
   chart: { name: string; revenue: number; costUsd: number; orders: number; qty: number }[];
   categories: { name: string; revenue: number; percentage: number }[];
   topProducts: { id: string; name: string; revenue: number; soldCount: number; image?: string }[];
-  recentOrders: { id: string; orderId: number | string; name: string; sub: string; total: number; status: string; date: number }[];
+  recentOrders: { id: string; orderId: number | string; name: string; sub: string; total: number; status: string; date: number; image?: string }[];
 }
 
 /** Custom sana oralig'i (ms). Berilsa, preset timeRange'ni inkor qiladi. */
@@ -314,9 +509,19 @@ export function useLogisticsAndFines() {
 
 export function useFinanceReconciliation(dateFrom?: number, dateTo?: number) {
   const storeId = useActiveStoreId();
-  return useQuery({
+  const forceRef = useRef(false);
+  const query = useQuery({
     queryKey: ['finance', 'reconciliation', storeId, dateFrom, dateTo],
-    queryFn: () => financeApi.getReconciliation(storeId!, dateFrom, dateTo),
+    queryFn: async () => {
+      const { apiClient } = await import('@/lib/api/client');
+      const force = forceRef.current;
+      forceRef.current = false;
+      const { data } = await apiClient.get(`/marketplace/stores/${storeId}/finance/reconciliation`, {
+        timeout: 120_000,
+        params: { ...(dateFrom != null ? { dateFrom } : {}), ...(dateTo != null ? { dateTo } : {}), ...(force ? { force: 1 } : {}) },
+      });
+      return data;
+    },
     enabled: !!storeId,
     staleTime: 10 * 60 * 1000, // 10 min — heavy Uzum API call, cache hard
     gcTime: 30 * 60 * 1000,
@@ -327,4 +532,6 @@ export function useFinanceReconciliation(dateFrom?: number, dateTo?: number) {
     // another 3 minutes. User can hit "Yangilash" manually if they want to retry.
     retry: 0,
   });
+  const refresh = () => { forceRef.current = true; return query.refetch(); };
+  return { ...query, refresh };
 }

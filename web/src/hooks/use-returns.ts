@@ -17,6 +17,7 @@ export interface ReturnRow {
   publicId: string | null;
   uzumOrderId: string;
   productName: string;
+  image: string | null;
   skuTitle: string | null;
   barcode: string | null;
   quantity: number;
@@ -36,6 +37,7 @@ export interface ReturnsAnalytics {
   totalQty: number;
   totalSaleValue: number;
   totalCostUsd: number;
+  totalReceivedCostUsd: number;
   lostItems: number;
   lostQty: number;
   lostCostUsd: number;
@@ -112,7 +114,7 @@ export interface ReturnInvoiceItem {
   skuTitle: string | null;
   productTitle: string | null;
   purchasePrice: number | null;
-  photo: string | null;
+  photo: unknown;
 }
 
 export interface ReturnInvoice {
@@ -170,4 +172,3 @@ export function useReturnInvoiceDetail(returnId: number | null) {
     retry: 0,
   });
 }
-

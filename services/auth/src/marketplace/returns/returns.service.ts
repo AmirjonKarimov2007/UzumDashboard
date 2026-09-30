@@ -241,6 +241,10 @@ export class ReturnsService {
       orderBy: { returnedAt: 'desc' },
     });
 
+    const liveCost = await this.financeSync.resolveCosts(userId, storeId, true).catch(() => null);
+    const liveCostByTitle: Record<string, number> = liveCost?.costByFullTitle || {};
+    const liveCostByProductId: Record<string, number> = liveCost?.costByProductId || {};
+
     // Jadval uchun to'liq filtrlangan ro'yxat (product/sku/status ham)
     const list = all.filter((r) => {
       if (filters.status && r.status !== filters.status) return false;
@@ -250,15 +254,23 @@ export class ReturnsService {
     });
 
     const num = (d: any) => (d == null ? 0 : Number(d));
+    const costUsdOf = (r: any) => {
+      const byTitle = r.skuTitle ? liveCostByTitle[String(r.skuTitle)] : undefined;
+      const byProduct = r.productId != null ? liveCostByProductId[String(r.productId)] : undefined;
+      return byTitle ?? byProduct ?? num(r.costUsd);
+    };
     const lost = all.filter((r) => r.status === 'LOST');
 
     const totalItems = all.length;
     const totalQty = all.reduce((s, r) => s + (r.quantity || 0), 0);
     const totalSaleValue = all.reduce((s, r) => s + num(r.salePrice) * (r.quantity || 1), 0);
-    const totalCostUsd = all.reduce((s, r) => s + num(r.costUsd) * (r.quantity || 1), 0);
+    const totalCostUsd = all.reduce((s, r) => s + costUsdOf(r) * (r.quantity || 1), 0);
+    const totalReceivedCostUsd = all
+      .filter((r) => r.status === 'RECEIVED')
+      .reduce((s, r) => s + costUsdOf(r) * (r.quantity || 1), 0);
     const lostItems = lost.length;
     const lostQty = lost.reduce((s, r) => s + (r.quantity || 0), 0);
-    const lostCostUsd = lost.reduce((s, r) => s + num(r.costUsd) * (r.quantity || 1), 0);
+    const lostCostUsd = lost.reduce((s, r) => s + costUsdOf(r) * (r.quantity || 1), 0);
     const lostSaleValue = lost.reduce((s, r) => s + num(r.salePrice) * (r.quantity || 1), 0);
 
     // Status bo'yicha taqsimot
@@ -309,6 +321,7 @@ export class ReturnsService {
         totalQty,
         totalSaleValue,
         totalCostUsd,
+        totalReceivedCostUsd,
         lostItems,
         lostQty,
         lostCostUsd,

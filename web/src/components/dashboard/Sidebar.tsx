@@ -7,7 +7,6 @@ import {
   BarChart3,
   Package,
   Wallet,
-  Sparkles,
   Settings,
   HelpCircle,
   ChevronDown,
@@ -31,7 +30,6 @@ const mainNavigation = [
   { name: "Analitika", href: "/dashboard/analytics", icon: BarChart3, label: "Analytics" },
   { name: "Mahsulotlar", href: "/dashboard/products", icon: Package, label: "Products" },
   { name: "Moliya", href: "/dashboard/finance", icon: Wallet, label: "Finance" },
-  { name: "AI Tahlil", href: "/dashboard/ai", icon: Sparkles, label: "AI Insights" },
 ];
 
 const secondaryNavigation = [

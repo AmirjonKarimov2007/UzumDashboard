@@ -38,11 +38,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <Toaster
         position="top-right"
         theme={theme}
-        toastOptions={
-          theme === "light"
-            ? { style: { background: "#ffffff", border: "1px solid #e4e4e7", color: "#18181b" } }
-            : { style: { background: "#0f0f16", border: "1px solid #1c1c24", color: "#e4e4e7" } }
-        }
+        toastOptions={{
+          style: {
+            background: "var(--surface-raised)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+            borderRadius: "14px",
+            boxShadow: "var(--shadow-lg)",
+          },
+        }}
       />
       <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>

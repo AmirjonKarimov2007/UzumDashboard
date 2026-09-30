@@ -50,6 +50,18 @@ yarn-error.log*
 .idea/
 graphify-out/
 
+# AI automation runtime data (may contain product/account information)
+var/ai-uploads/
+**/var/ai-uploads/
+var/ai-generated/
+**/var/ai-generated/
+var/uzum-browser-profile/
+**/var/uzum-browser-profile/
+var/uzum-publisher-screenshots/
+**/var/uzum-publisher-screenshots/
+
 # ─── Temp ───────────────────────────────────────────────────────────────
 *.tmp
 *.tmp[0-9]*
+*.bak-*
+web-lint.json

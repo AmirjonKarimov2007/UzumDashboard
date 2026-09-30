@@ -1,6 +1,9 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards, Req } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from '../services/auth.service';
-import { SendOtpDto, VerifyOtpDto, TelegramLoginDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
+import { SendOtpDto, VerifyOtpDto, RefreshTokenDto, LogoutDto } from '../dto/auth.dto';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -11,6 +14,8 @@ export class AuthController {
    * Send OTP to phone number
    */
   @Post('send-otp')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async sendOtp(@Body() dto: SendOtpDto) {
     return this.authService.sendOtp(dto);
@@ -18,22 +23,18 @@ export class AuthController {
 
   /**
    * POST /auth/verify-otp
-   * Verify OTP and login/register user
+   * Verify Telegram OTP and log in an existing user
    */
   @Post('verify-otp')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  async verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtp(dto);
-  }
-
-  /**
-   * POST /auth/telegram
-   * Login via Telegram WebApp initData (no OTP) — auto-detects the linked phone
-   */
-  @Post('telegram')
-  @HttpCode(HttpStatus.OK)
-  async telegram(@Body() dto: TelegramLoginDto) {
-    return this.authService.loginWithTelegram(dto);
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Req() req: any) {
+    return this.authService.verifyOtp({
+      ...dto,
+      ipAddress: req.ip,
+      userAgent: req.get?.('user-agent'),
+    });
   }
 
   /**
@@ -61,9 +62,10 @@ export class AuthController {
    * Logout from all devices
    */
   @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async logoutAll(@Body() body: { userId: string }) {
-    return this.authService.logoutAll(body.userId);
+  async logoutAll(@CurrentUser('id') userId: string) {
+    return this.authService.logoutAll(userId);
   }
 
   /**
@@ -71,8 +73,9 @@ export class AuthController {
    * Validate access token
    */
   @Post('validate')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async validate(@Body() body: { userId: string }) {
-    return this.authService.validateToken(body.userId);
+  async validate(@CurrentUser('id') userId: string) {
+    return this.authService.validateToken(userId);
   }
 }

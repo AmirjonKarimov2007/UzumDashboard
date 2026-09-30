@@ -23,6 +23,7 @@ import {
   Eye,
   EyeOff,
   Pencil,
+  ContactRound,
 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { useAuthStore } from "@/stores/auth-store";
@@ -31,10 +32,12 @@ import { useConnectStore, useTestConnection, useSyncStatus, useFullSync, useDisc
 import { useMe, useUpdateProfile } from "@/hooks/use-users";
 import { toast } from "sonner";
 import { useEffect } from "react";
+import { useSmartupSettings, useUpdateSmartupSettings } from "@/hooks/use-smartup-settings";
 
 const sections = [
   { id: "profile",       label: "Profil",          icon: User,    color: "#8b5cf6" },
   { id: "store",         label: "Do'kon ulanish",   icon: Store,   color: "#3b82f6" },
+  { id: "smartup",       label: "Smartup klient",   icon: ContactRound, color: "#8b5cf6" },
   { id: "notifications", label: "Bildirishnomalar", icon: Bell,    color: "#f59e0b" },
   { id: "security",      label: "Xavfsizlik",       icon: Shield,  color: "#10b981" },
   { id: "appearance",    label: "Ko'rinish",        icon: Palette, color: "#ec4899" },
@@ -44,7 +47,6 @@ const sections = [
 const notifSettings = [
   { id: "new_order",    label: "Yangi buyurtma",   desc: "Buyurtma kelganda xabardor qiling" },
   { id: "stock_alert",  label: "Kam zaxira ogoh",  desc: "Mahsulot tugay deb qolganda" },
-  { id: "ai_insight",   label: "AI tavsiyalar",    desc: "Yangi AI tavsiyalar tayyor bo'lganda" },
   { id: "daily_report", label: "Kunlik hisobot",   desc: "Har kuni soat 20:00 da" },
   { id: "payment",      label: "To'lov xabarlari", desc: "Uzum to'lovlari haqida" },
 ];
@@ -86,7 +88,7 @@ export default function SettingsPage() {
   }, [me, user, profileDirty]);
 
   const [notifs, setNotifs] = useState<Record<string, boolean>>({
-    new_order: true, stock_alert: true, ai_insight: true, daily_report: false, payment: true,
+    new_order: true, stock_alert: true, daily_report: false, payment: true,
   });
   const [twoFa, setTwoFa] = useState(false);
 
@@ -96,6 +98,18 @@ export default function SettingsPage() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [autoSync, setAutoSync] = useState(true);
   const [editing, setEditing] = useState(false); // edit-mode for an already-connected store
+
+  // Smartup client routing is stored per Uzum store.
+  const { data: smartupSettings, isLoading: smartupSettingsLoading } = useSmartupSettings();
+  const updateSmartupSettings = useUpdateSmartupSettings();
+  const [smartupClientId, setSmartupClientId] = useState("");
+  const [smartupDirty, setSmartupDirty] = useState(false);
+
+  useEffect(() => {
+    if (!smartupDirty && smartupSettings) {
+      setSmartupClientId(smartupSettings.clientId || smartupSettings.effectiveClientId || "");
+    }
+  }, [smartupSettings, smartupDirty]);
 
   const connectStore = useConnectStore();
   const testConnection = useTestConnection();
@@ -156,6 +170,21 @@ export default function SettingsPage() {
     fullSync.mutate();
   };
 
+  const handleSmartupSave = () => {
+    const clientId = smartupClientId.trim();
+    if (!clientId) {
+      toast.error("Smartup klient ID ni kiriting");
+      return;
+    }
+    if (clientId.length > 100) {
+      toast.error("Smartup klient ID 100 belgidan oshmasligi kerak");
+      return;
+    }
+    updateSmartupSettings.mutate(clientId, {
+      onSuccess: () => setSmartupDirty(false),
+    });
+  };
+
   const isConnected = syncStatus?.isConnected;
 
   return (
@@ -187,6 +216,9 @@ export default function SettingsPage() {
                   </div>
                   {s.label}
                   {s.id === "store" && isConnected && (
+                    <span className="ml-auto w-2 h-2 rounded-full bg-[#10b981]" />
+                  )}
+                  {s.id === "smartup" && smartupSettings?.effectiveClientId && (
                     <span className="ml-auto w-2 h-2 rounded-full bg-[#10b981]" />
                   )}
                   {activeSection === s.id && (
@@ -520,6 +552,94 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* ── Smartup client routing ───────────────── */}
+            {activeSection === "smartup" && (
+              <div>
+                <div className="px-6 py-5 border-b border-[#18181b]">
+                  <h2 className="text-sm font-semibold text-white">Smartup klienti</h2>
+                  <p className="text-xs text-[#52525b] mt-0.5">
+                    FBS va FBO orderlari qaysi Smartup klientiga yozilishini belgilang
+                  </p>
+                </div>
+
+                <div className="p-6 space-y-5">
+                  <div className="rounded-2xl border border-[#8b5cf6]/25 bg-[#8b5cf6]/8 p-4 flex gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-[#8b5cf6]/15 flex items-center justify-center flex-shrink-0">
+                      <ContactRound className="w-4.5 h-4.5 text-[#a78bfa]" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white">
+                        {smartupSettings?.storeName || "Joriy do'kon"}
+                      </p>
+                      <p className="text-xs text-[#a1a1aa] mt-1 leading-relaxed">
+                        Bu o'zgarish faqat keyingi jo'natiladigan orderlarga ta'sir qiladi. Smartupga oldin ko'chirilgan orderlar o'zgarmaydi.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-[#a1a1aa] mb-2">
+                      Klient ID <span className="text-[#ef4444]">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={smartupClientId}
+                      maxLength={100}
+                      disabled={smartupSettingsLoading || updateSmartupSettings.isPending}
+                      onChange={(event) => {
+                        setSmartupClientId(event.target.value);
+                        setSmartupDirty(true);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && smartupDirty) handleSmartupSave();
+                      }}
+                      placeholder="Masalan: CLIENT-001"
+                      className="w-full h-11 px-3.5 rounded-xl bg-[#18181b] border border-[#27272a] text-sm font-mono text-white placeholder:text-[#52525b] focus:outline-none focus:border-[#8b5cf6] focus:ring-1 focus:ring-[#8b5cf6]/30 transition-all disabled:opacity-60"
+                    />
+                    <div className="mt-2 flex items-start gap-2 text-[11px] leading-relaxed">
+                      <span className={cn(
+                        "mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0",
+                        smartupSettings?.effectiveClientId ? "bg-[#10b981]" : "bg-[#f59e0b]",
+                      )} />
+                      <span className={smartupSettings?.effectiveClientId ? "text-[#71717a]" : "text-[#f59e0b]"}>
+                        {smartupSettingsLoading
+                          ? "Sozlama yuklanmoqda..."
+                          : smartupSettings?.usesDefault && smartupSettings.effectiveClientId
+                            ? `Hozir serverdagi standart ${smartupSettings.effectiveClientId} klienti ishlatilmoqda. Saqlasangiz, shu do'kon uchun alohida belgilanadi.`
+                            : smartupSettings?.effectiveClientId
+                              ? `Faol klient: ${smartupSettings.effectiveClientId}`
+                              : "Klient ID sozlanmaguncha Smartupga order yuborilmaydi."}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-6 py-4 border-t border-[#18181b] flex items-center justify-between gap-4">
+                  <p className="text-[11px] text-[#52525b]">
+                    FBS order, FBS ta'minlash va FBO nakladnoy uchun bir xil ishlaydi.
+                  </p>
+                  <button
+                    onClick={handleSmartupSave}
+                    disabled={!smartupDirty || !smartupClientId.trim() || updateSmartupSettings.isPending}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#8b5cf6] text-white text-sm font-medium hover:bg-[#7c3aed] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  >
+                    {updateSmartupSettings.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : updateSmartupSettings.isSuccess && !smartupDirty ? (
+                      <Check className="w-4 h-4" />
+                    ) : (
+                      <Save className="w-4 h-4" />
+                    )}
+                    {updateSmartupSettings.isPending
+                      ? "Saqlanmoqda..."
+                      : updateSmartupSettings.isSuccess && !smartupDirty
+                        ? "Saqlandi"
+                        : "Saqlash"}
+                  </button>
                 </div>
               </div>
             )}

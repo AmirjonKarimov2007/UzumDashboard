@@ -5,8 +5,9 @@ import { toast } from 'sonner';
 
 export function useMe() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const userId = useAuthStore((s) => s.user?.id);
   return useQuery({
-    queryKey: ['users', 'me'],
+    queryKey: ['users', 'me', userId],
     queryFn: () => usersApi.getMe(),
     enabled: isAuthenticated,
     staleTime: 5 * 60 * 1000,

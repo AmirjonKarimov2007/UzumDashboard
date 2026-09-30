@@ -11,6 +11,7 @@ import {
 import { PageHeader } from "@/components/shared/page-header";
 import { cn } from "@/lib/utils";
 import { useFbsStocks, useSetFbsStocks, type FbsStockItem } from "@/hooks/use-stocks";
+import { productImageUrl } from "@/lib/uzum-image";
 
 /** To'liq summa, minglik ajratgich bilan: "1 243 275 so'm" (qisqartmasdan). */
 function fmtSom(n?: number | null): string {
@@ -22,12 +23,11 @@ function fmtNum(n?: number | null): string {
 
 /** Yuqori sifatli rasm (lightbox uchun): 540 -> original. */
 function hiResImage(url?: string | null): string | null {
-  if (!url) return null;
-  return url.replace(/\/t_product_[^/]+\.jpg$/i, "/original.jpg");
+  return productImageUrl(url, "high");
 }
 
 type FilterId = "all" | "in_stock" | "out_of_stock" | "unlinked";
-type SortId = "newest" | "amount_desc" | "amount_asc" | "name" | "sold_desc" | "value_desc";
+type SortId = "uzum" | "newest" | "amount_desc" | "amount_asc" | "name" | "sold_desc" | "value_desc";
 
 /** Mahsulot kaliti (bir tovarning bir nechta SKU si bo'lishi mumkin). */
 function productKey(s: FbsStockItem): string {
@@ -40,7 +40,7 @@ export default function InventoryPage() {
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterId>("all");
-  const [sort, setSort] = useState<SortId>("newest");
+  const [sort, setSort] = useState<SortId>("uzum");
   // skuId → yangi qiymat (faqat o'zgartirilganlar)
   const [edits, setEdits] = useState<Record<number, number>>({});
   // Lightbox: filtered ro'yxatdagi indeks (yoki null)
@@ -48,7 +48,8 @@ export default function InventoryPage() {
   // "O'zgartirilganlarni ko'rish" oynasi
   const [showChanges, setShowChanges] = useState(false);
 
-  const stocks = data?.stocks ?? [];
+  const stockItems = data?.stocks;
+  const stocks = useMemo(() => stockItems ?? [], [stockItems]);
 
   // ── Tovar (mahsulot) bo'yicha hisob — SKU bo'yicha emas ──────────────
   const productCounts = useMemo(() => {
@@ -88,6 +89,7 @@ export default function InventoryPage() {
     const val = (s: FbsStockItem) => s.amount * (s.price || 0);
     return [...list].sort((a, b) => {
       switch (sort) {
+        case "uzum": return 0;
         case "newest": return (b.productId ?? -1) - (a.productId ?? -1) || a.skuId - b.skuId;
         case "amount_asc": return a.amount - b.amount;
         case "amount_desc": return b.amount - a.amount;
@@ -124,7 +126,15 @@ export default function InventoryPage() {
 
   const saveAll = async () => {
     if (dirty.length === 0) return;
-    await setStocks.mutateAsync(dirty.map((s) => ({ skuId: s.skuId, amount: edits[s.skuId] })));
+    await setStocks.mutateAsync(dirty.map((s) => ({
+      skuId: s.skuId,
+      amount: edits[s.skuId],
+      barcode: s.barcode,
+      fbsLinked: s.fbsLinked,
+      fbsAllowed: s.fbsAllowed,
+      dbsLinked: s.dbsLinked,
+      dbsAllowed: s.dbsAllowed,
+    })));
     setEdits({});
     setShowChanges(false);
   };
@@ -207,7 +217,7 @@ export default function InventoryPage() {
   const lightboxItem = lightbox != null ? filtered[lightbox] : null;
 
   return (
-    <div className="space-y-6 pb-28">
+    <div className="space-y-6 pb-40 lg:pb-28">
       <PageHeader
         title="Inventar — FBS qoldiqlari"
         subtitle="Mahsulot qoldiqlarini ko'rish va yangilash"
@@ -291,6 +301,7 @@ export default function InventoryPage() {
             onChange={(e) => setSort(e.target.value as SortId)}
             className="h-10 pl-9 pr-8 rounded-xl bg-[#0f0f16] border border-[#27272a] text-xs text-white focus:outline-none focus:border-[#8b5cf6] appearance-none cursor-pointer"
           >
+            <option value="uzum">Uzum tartibi</option>
             <option value="newest">Eng yangilari</option>
             <option value="amount_desc">Qoldiq: ko'pdan</option>
             <option value="amount_asc">Qoldiq: kamdan</option>
@@ -346,7 +357,7 @@ export default function InventoryPage() {
                       {s.image ? (
                         <>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={s.image} alt={s.productTitle} className="w-full h-full object-cover transition-transform group-hover:scale-110" referrerPolicy="no-referrer" />
+                          <img src={productImageUrl(s.image, "thumb") || ""} alt={s.productTitle} className="w-full h-full object-cover transition-transform group-hover:scale-110" referrerPolicy="no-referrer" />
                           <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                             <ZoomIn className="w-4 h-4 text-white" />
                           </span>
@@ -435,36 +446,36 @@ export default function InventoryPage() {
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 80, opacity: 0 }}
             transition={{ type: "spring", damping: 26, stiffness: 320 }}
-            className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-2xl"
+            className="fixed bottom-[calc(84px+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-50 w-[calc(100%-1rem)] max-w-2xl lg:bottom-5 lg:w-[calc(100%-2rem)]"
           >
-            <div className="rounded-2xl bg-[#13131a] border border-[#8b5cf6]/40 shadow-2xl shadow-black/50 px-4 py-3 flex items-center justify-between gap-3 backdrop-blur">
+            <div className="rounded-2xl bg-[#13131a] border border-[#8b5cf6]/40 shadow-2xl shadow-black/50 px-3 py-3 sm:px-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 backdrop-blur">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="w-8 h-8 rounded-lg bg-[#8b5cf6]/15 text-[#a78bfa] flex items-center justify-center flex-shrink-0">
                   <Tag className="w-4 h-4" />
                 </span>
-                <p className="text-sm text-white">
+                <p className="text-sm text-white truncate">
                   <span className="font-bold">{dirty.length}</span> ta qoldiq o'zgartirildi
                 </p>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="grid grid-cols-[1fr_1fr_1.25fr] sm:flex sm:items-center gap-2 w-full sm:w-auto sm:flex-shrink-0">
                 <button
                   onClick={() => setShowChanges(true)}
                   disabled={setStocks.isPending}
-                  className="px-3 py-2 rounded-lg bg-[#18181b] border border-[#27272a] text-xs font-medium text-[#a1a1aa] hover:text-white transition-all disabled:opacity-50 flex items-center gap-1.5"
+                  className="min-h-10 px-3 py-2 rounded-lg bg-[#18181b] border border-[#27272a] text-xs font-medium text-[#a1a1aa] hover:text-white transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
                   <ListChecks className="w-3.5 h-3.5" /> Ko'rish
                 </button>
                 <button
                   onClick={() => setEdits({})}
                   disabled={setStocks.isPending}
-                  className="px-3 py-2 rounded-lg bg-[#18181b] border border-[#27272a] text-xs font-medium text-[#a1a1aa] hover:text-white transition-all disabled:opacity-50"
+                  className="min-h-10 px-3 py-2 rounded-lg bg-[#18181b] border border-[#27272a] text-xs font-medium text-[#a1a1aa] hover:text-white transition-all disabled:opacity-50 flex items-center justify-center"
                 >
                   <X className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Bekor qilish
                 </button>
                 <button
                   onClick={saveAll}
                   disabled={setStocks.isPending}
-                  className="px-4 py-2 rounded-lg bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] hover:from-[#9d70f8] hover:to-[#7c3aed] text-white text-xs font-semibold transition-all disabled:opacity-60 flex items-center gap-1.5 shadow-lg shadow-[#8b5cf6]/20"
+                  className="min-h-10 px-4 py-2 rounded-lg bg-gradient-to-br from-[#8b5cf6] to-[#6d28d9] hover:from-[#9d70f8] hover:to-[#7c3aed] text-white text-xs font-semibold transition-all disabled:opacity-60 flex items-center justify-center gap-1.5 shadow-lg shadow-[#8b5cf6]/20"
                 >
                   {setStocks.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                   Saqlash
@@ -520,7 +531,7 @@ export default function InventoryPage() {
                       <div className="w-10 h-10 rounded-lg bg-[#18181b] overflow-hidden flex items-center justify-center ring-1 ring-[#27272a] flex-shrink-0">
                         {s.image ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={s.image} alt={s.productTitle} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <img src={productImageUrl(s.image, "thumb") || ""} alt={s.productTitle} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         ) : (
                           <Package className="w-4 h-4 text-[#3f3f46]" />
                         )}

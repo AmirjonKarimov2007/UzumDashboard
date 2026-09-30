@@ -31,6 +31,7 @@ import { useReturnsAnalytics, type ReturnsFilters } from "@/hooks/use-returns";
 import { useSyncStatus } from "@/hooks/use-sync";
 import { useDashboardStore } from "@/stores/dashboard-store";
 import { formatMoney, usdToUzs } from "@/lib/currency";
+import { productImageUrl } from "@/lib/uzum-image";
 import Link from "next/link";
 
 const timeRanges = [
@@ -86,7 +87,17 @@ export default function DashboardPage() {
   const [draftFrom, setDraftFrom] = useState("");
   const [draftTo, setDraftTo] = useState("");
 
-  const { data: summary, isLoading: summaryLoading, isFetching: summaryFetching, refresh: refreshSummary } = useDashboardSummary(timeRange, custom);
+  const summaryRange = useMemo(() => {
+    if (custom) return custom;
+    const now = Date.now();
+    const presetDays: Record<string, number> = { week: 7, month: 30, quarter: 90, year: 365 };
+    if (timeRange === "today") return { dateFrom: dayStartMs(toInputDate(now)), dateTo: dayEndMs(toInputDate(now)) };
+    const days = presetDays[timeRange];
+    if (days) return { dateFrom: dayStartMs(toInputDate(now - (days - 1) * 86400000)), dateTo: dayEndMs(toInputDate(now)) };
+    return null;
+  }, [timeRange, custom]);
+
+  const { data: summary, isLoading: summaryLoading, isFetching: summaryFetching, refresh: refreshSummary } = useDashboardSummary(timeRange, summaryRange);
   const { data: syncStatus } = useSyncStatus();
 
   const isConnected = syncStatus?.isConnected;
@@ -449,6 +460,14 @@ export default function DashboardPage() {
                 return (
                   <div key={p.id} className="flex items-center gap-3">
                     <span className="text-xs font-bold text-[#3f3f46] w-4">#{i + 1}</span>
+                    <div className="w-10 h-10 rounded-lg bg-[#18181b] overflow-hidden flex-shrink-0 flex items-center justify-center ring-1 ring-[#27272a]">
+                      {p.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={productImageUrl(p.image, "thumb") || ""} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <Package className="w-4 h-4 text-[#3f3f46]" />
+                      )}
+                    </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-white truncate">{p.name}</p>
                       <div className="mt-1 h-1 rounded-full bg-[#18181b] overflow-hidden">
@@ -489,6 +508,14 @@ export default function DashboardPage() {
             <div className="divide-y divide-[#18181b]">
               {recentOrders.slice(0, 6).map((order) => (
                 <div key={order.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className="w-9 h-9 rounded-lg bg-[#18181b] overflow-hidden flex-shrink-0 flex items-center justify-center ring-1 ring-[#27272a]">
+                    {order.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={productImageUrl(order.image, "thumb") || ""} alt={order.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <Package className="w-4 h-4 text-[#3f3f46]" />
+                    )}
+                  </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-medium text-white truncate">
                       Buyurtma #{order.orderId}

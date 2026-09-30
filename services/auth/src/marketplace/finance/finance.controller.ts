@@ -1,9 +1,11 @@
-import { Controller, Get, Param, Query, UseGuards, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AnalyticsService } from '../analytics/analytics.service';
 import { FinanceSyncService } from './finance-sync.service';
 import { PrismaService } from '../../common/database/prisma.service';
+import { CreateManualWithdrawalDto, UpdateManualWithdrawalDto } from './dto/manual-withdrawal.dto';
+import { CreateSupplierPaymentDto, UpdateSupplierPaymentDto } from './dto/supplier-payment.dto';
 
 @Controller('marketplace/stores/:storeId/finance')
 @UseGuards(JwtAuthGuard)
@@ -13,6 +15,88 @@ export class FinanceController {
     private readonly financeSyncService: FinanceSyncService,
     private readonly prisma: PrismaService,
   ) {}
+
+  @Get('manual-withdrawals')
+  getManualWithdrawals(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.financeSyncService.getManualWithdrawals(userId, storeId, {
+      dateFrom: dateFrom ? Number(dateFrom) : undefined,
+      dateTo: dateTo ? Number(dateTo) : undefined,
+    });
+  }
+
+  @Post('manual-withdrawals')
+  createManualWithdrawal(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: CreateManualWithdrawalDto,
+  ) {
+    return this.financeSyncService.createManualWithdrawal(userId, storeId, dto);
+  }
+
+  @Patch('manual-withdrawals/:withdrawalId')
+  updateManualWithdrawal(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('withdrawalId') withdrawalId: string,
+    @Body() dto: UpdateManualWithdrawalDto,
+  ) {
+    return this.financeSyncService.updateManualWithdrawal(userId, storeId, withdrawalId, dto);
+  }
+
+  @Delete('manual-withdrawals/:withdrawalId')
+  deleteManualWithdrawal(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('withdrawalId') withdrawalId: string,
+  ) {
+    return this.financeSyncService.deleteManualWithdrawal(userId, storeId, withdrawalId);
+  }
+
+  @Get('supplier-payments')
+  getSupplierPayments(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.financeSyncService.getSupplierPayments(userId, storeId, {
+      dateFrom: dateFrom ? Number(dateFrom) : undefined,
+      dateTo: dateTo ? Number(dateTo) : undefined,
+    });
+  }
+
+  @Post('supplier-payments')
+  createSupplierPayment(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Body() dto: CreateSupplierPaymentDto,
+  ) {
+    return this.financeSyncService.createSupplierPayment(userId, storeId, dto);
+  }
+
+  @Patch('supplier-payments/:paymentId')
+  updateSupplierPayment(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('paymentId') paymentId: string,
+    @Body() dto: UpdateSupplierPaymentDto,
+  ) {
+    return this.financeSyncService.updateSupplierPayment(userId, storeId, paymentId, dto);
+  }
+
+  @Delete('supplier-payments/:paymentId')
+  deleteSupplierPayment(
+    @CurrentUser('id') userId: string,
+    @Param('storeId') storeId: string,
+    @Param('paymentId') paymentId: string,
+  ) {
+    return this.financeSyncService.deleteSupplierPayment(userId, storeId, paymentId);
+  }
 
   /**
    * Full reconciliation: sales (transfers) − withdrawals − other deductions = balance.
@@ -95,10 +179,12 @@ export class FinanceController {
     @Param('storeId') storeId: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('force') force?: string,
   ) {
     return this.financeSyncService.getReconciliation(userId, storeId, {
       dateFrom: dateFrom ? Number(dateFrom) : undefined,
       dateTo: dateTo ? Number(dateTo) : undefined,
+      force: force === '1' || force === 'true',
     });
   }
 

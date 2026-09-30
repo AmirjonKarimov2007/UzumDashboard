@@ -11,7 +11,6 @@ import {
   Package,
   Wallet,
   Boxes,
-  Sparkles,
   Settings,
   Users,
   X,
@@ -26,7 +25,6 @@ const typeColor: Record<NotificationType, string> = {
   error:   "#ef4444",
   warning: "#f59e0b",
   info:    "#3b82f6",
-  ai:      "#8b5cf6",
 };
 
 const categoryIcon: Record<NotificationCategory, React.ElementType> = {
@@ -34,7 +32,6 @@ const categoryIcon: Record<NotificationCategory, React.ElementType> = {
   product:  Package,
   finance:  Wallet,
   inventory:Boxes,
-  ai:       Sparkles,
   system:   Settings,
   team:     Users,
 };
@@ -65,7 +62,6 @@ export default function NotificationsPage() {
     { id: "all",       label: "Barchasi" },
     { id: "order",     label: "Buyurtmalar" },
     { id: "inventory", label: "Inventar" },
-    { id: "ai",        label: "AI" },
     { id: "finance",   label: "Moliya" },
     { id: "system",    label: "Tizim" },
   ];

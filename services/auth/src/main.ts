@@ -22,6 +22,9 @@ process.on('uncaughtException', (err: Error) => {
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
+  // Nginx is the only public hop in production. Trust one proxy so per-IP
+  // authentication throttling uses the visitor address, not 127.0.0.1.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('APP_PORT') || 3001;

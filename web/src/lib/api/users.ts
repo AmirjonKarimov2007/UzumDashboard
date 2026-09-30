@@ -8,6 +8,7 @@ export interface UserProfile {
   avatar: string | null;
   usdRate?: number;
   isActive?: boolean;
+  isSuperAdmin?: boolean;
   stores?: any[];
 }
 

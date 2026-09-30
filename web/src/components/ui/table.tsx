@@ -5,10 +5,10 @@ const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
 >(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  <div className="table-scroll relative w-full overflow-auto">
     <table
       ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
+    className={cn("w-full min-w-[680px] caption-bottom text-sm", className)}
       {...props}
     />
   </div>
@@ -19,7 +19,7 @@ const TableHeader = React.forwardRef<
   HTMLTableSectionElement,
   React.HTMLAttributes<HTMLTableSectionElement>
 >(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("[&_tr]:border-b [&_tr]:border-[#18181b]", className)} {...props} />
+  <thead ref={ref} className={cn("sticky top-0 z-[1] bg-[var(--surface)] [&_tr]:border-b [&_tr]:border-[var(--border)]", className)} {...props} />
 ));
 TableHeader.displayName = "TableHeader";
 
@@ -54,7 +54,7 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={cn(
-      "border-b border-[#18181b] transition-colors hover:bg-[#0f0f16]/60 data-[state=selected]:bg-[#5b21b6]/15",
+      "border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--surface-hover)] data-[state=selected]:bg-[var(--accent-soft)]",
       className
     )}
     {...props}
@@ -69,7 +69,7 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-12 px-4 text-left align-middle font-medium text-[#71717a] [&:has([role=checkbox])]:pr-0 uppercase text-xs tracking-wider",
+      "h-11 px-4 text-left align-middle text-[11px] font-bold text-[var(--text-muted)] [&:has([role=checkbox])]:pr-0",
       className
     )}
     {...props}
@@ -83,7 +83,7 @@ const TableCell = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn("p-4 align-middle text-[#a1a1aa] [&:has([role=checkbox])]:pr-0", className)}
+    className={cn("p-4 align-middle text-[var(--text-secondary)] [&:has([role=checkbox])]:pr-0", className)}
     {...props}
   />
 ));

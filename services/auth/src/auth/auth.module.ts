@@ -8,14 +8,14 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { UsersModule } from '../users/users.module';
 import { OtpModule } from '../otp/otp.module';
 import { SessionsModule } from '../sessions/sessions.module';
-import { SmsModule } from '../sms/sms.module';
+import { TelegramModule } from '../marketplace/telegram/telegram.module';
 
 @Module({
   imports: [
     UsersModule,
     OtpModule,
     SessionsModule,
-    SmsModule,
+    TelegramModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -23,7 +23,7 @@ import { SmsModule } from '../sms/sms.module';
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET') || 'change-me',
         signOptions: {
-          expiresIn: configService.get<string>('JWT_EXPIRES_IN') || '15m',
+          expiresIn: configService.get<string>('JWT_EXPIRES_IN') || '7d',
         },
       }),
     }),

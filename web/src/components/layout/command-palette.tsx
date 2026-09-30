@@ -11,7 +11,6 @@ import {
   Wallet,
   Boxes,
   Bell,
-  Sparkles,
   Users,
   FileText,
   Settings,
@@ -20,6 +19,7 @@ import {
   ArrowRight,
   Hash,
   Zap,
+  PackageCheck,
 } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard-store";
 import { useState } from "react";
@@ -44,7 +44,8 @@ const commands: CommandItem[] = [
   { id: "finance", label: "Moliya", description: "Daromad va xarajatlar", href: "/finance", icon: Wallet, group: "Sahifalar" },
   { id: "inventory", label: "Inventar", description: "Ombor holati", href: "/inventory", icon: Boxes, group: "Sahifalar" },
   { id: "notifications", label: "Bildirishnomalar", description: "Ogohlantirish va xabarlar", href: "/notifications", icon: Bell, group: "Sahifalar" },
-  { id: "ai", label: "AI Tahlil", description: "Aqlli tavsiyalar va bashorat", href: "/ai", icon: Sparkles, group: "Sahifalar" },
+  { id: "supplies", label: "Ta’minlashlar", description: "FBS ta’minlashlar va Smartup importi", href: "/supplies", icon: Boxes, group: "Sahifalar" },
+  { id: "fbo-supplies", label: "FBO ta’minlashlar", description: "FBO nakladnoylar, mahsulotlar va Smartup importi", href: "/fbo-supplies", icon: PackageCheck, group: "Sahifalar" },
   { id: "team", label: "Jamoa", description: "Foydalanuvchi boshqaruvi", href: "/team", icon: Users, group: "Sahifalar" },
   { id: "reports", label: "Hisobotlar", description: "Eksport va hisobotlar", href: "/reports", icon: FileText, group: "Sahifalar" },
   { id: "settings", label: "Sozlamalar", description: "Profil va tizim sozlamalari", href: "/settings", icon: Settings, group: "Sahifalar" },
@@ -52,7 +53,6 @@ const commands: CommandItem[] = [
   { id: "new-product", label: "Yangi mahsulot qo'shish", description: "Mahsulot katalogiga qo'shish", href: "/products", icon: Package, group: "Tezkor amallar", shortcut: ["N", "P"] },
   { id: "view-orders", label: "Kutilayotgan buyurtmalar", description: "Pending statusdagi buyurtmalar", href: "/orders", icon: ShoppingCart, group: "Tezkor amallar" },
   { id: "finance-report", label: "Moliyaviy hisobot", description: "Joriy oy hisoboti", href: "/reports", icon: FileText, group: "Tezkor amallar" },
-  { id: "ai-insights", label: "AI tavsiyalarni ko'rish", description: "Aqlli tahlil va takliflar", href: "/ai", icon: Sparkles, group: "Tezkor amallar", shortcut: ["A", "I"] },
 ];
 
 export function CommandPalette() {

@@ -4,7 +4,6 @@ import type {
   InventoryItem,
   Notification,
   TeamMember,
-  AIInsight,
   Report,
   ChartDataPoint,
 } from "@/types";
@@ -353,17 +352,6 @@ export const mockNotifications: Notification[] = [
     actionHref: "/orders",
   },
   {
-    id: "n3",
-    type: "ai",
-    category: "ai",
-    title: "AI tavsiya",
-    message: "Protein Shake Whey mahsuloti so'nggi 30 kunda 0 ta sotilgan. Bu mahsulotni ko'rib chiqing.",
-    isRead: false,
-    createdAt: new Date(Date.now() - 7200000).toISOString(),
-    actionLabel: "Tahlil qilish",
-    actionHref: "/ai",
-  },
-  {
     id: "n4",
     type: "warning",
     category: "inventory",
@@ -391,17 +379,6 @@ export const mockNotifications: Notification[] = [
     message: "Bugun 42 ta buyurtma qabul qilindi. Bu so'nggi 30 kunning rekordi!",
     isRead: true,
     createdAt: new Date(Date.now() - 172800000).toISOString(),
-  },
-  {
-    id: "n7",
-    type: "ai",
-    category: "ai",
-    title: "Narx optimizatsiyasi",
-    message: "Samsung Galaxy A54 narxini 4,590,000 ga tushirish 23% ko'proq sotuv keltirishi mumkin.",
-    isRead: true,
-    createdAt: new Date(Date.now() - 259200000).toISOString(),
-    actionLabel: "Ko'rish",
-    actionHref: "/ai",
   },
   {
     id: "n8",
@@ -461,91 +438,6 @@ export const mockTeamMembers: TeamMember[] = [
   },
 ];
 
-// ─── AI Insights ──────────────────────────────────────────────────────────────
-export const mockAIInsights: AIInsight[] = [
-  {
-    id: "ai1",
-    type: "dead_product",
-    severity: "critical",
-    title: "O'lik mahsulot aniqlandi",
-    description:
-      'Protein Shake Whey Gold 2kg so\'nggi 45 kunda atigi 3 ta sotilgan. Saqlash xarajatlari daromaddan oshib ketmoqda.',
-    impact: "-180,000 UZS/oy (saqlash + omborxona)",
-    recommendation: "Narxni 20-30% ga tushiring yoki mahsulotni promosiyaga qo'ying",
-    potentialGain: 760000,
-    affectedProduct: "Protein Shake Whey Gold 2kg",
-    confidence: 94,
-    createdAt: new Date(Date.now() - 7200000).toISOString(),
-  },
-  {
-    id: "ai2",
-    type: "price_optimization",
-    severity: "high",
-    title: "Narx optimizatsiyasi imkoniyati",
-    description:
-      "Samsung Galaxy A54 raqobatchilardan 8% qimmat. Narxni tushirish sotuvni 34% oshirishi mumkin.",
-    impact: "+4,200,000 UZS qo'shimcha daromad/oy",
-    recommendation: "Narxni 4,890,000 dan 4,550,000 UZS ga tushiring",
-    potentialGain: 4200000,
-    affectedProduct: "Samsung Galaxy A54 5G 128GB",
-    confidence: 87,
-    createdAt: new Date(Date.now() - 14400000).toISOString(),
-  },
-  {
-    id: "ai3",
-    type: "stock_alert",
-    severity: "high",
-    title: "Kritik zaxira darajasi",
-    description:
-      "LG OLED TV 55\" C3 Series 5 ta qolgan. Joriy sotuv sur'atida 12 kunda tugaydi.",
-    impact: "Potensial yo'qotilgan sotuv: 18,900,000 UZS/hafta",
-    recommendation: "Zudlik bilan 20-30 dona buyurtma bering",
-    potentialGain: 37800000,
-    affectedProduct: 'LG OLED TV 55" C3 Series',
-    confidence: 96,
-    createdAt: new Date(Date.now() - 21600000).toISOString(),
-  },
-  {
-    id: "ai4",
-    type: "trend",
-    severity: "medium",
-    title: "Ko'tarilayotgan trend",
-    description:
-      "Air fryer kategoriyasi so'nggi 30 kunda 156% o'sdi. Sizda faqat 1 ta mahsulot bor.",
-    impact: "Potensial bozor ulushi: 12,400,000 UZS/oy",
-    recommendation: "Tefal va Philips air fryer modellarini assortimentga qo'shing",
-    potentialGain: 12400000,
-    confidence: 78,
-    createdAt: new Date(Date.now() - 43200000).toISOString(),
-  },
-  {
-    id: "ai5",
-    type: "opportunity",
-    severity: "medium",
-    title: "Cross-sell imkoniyati",
-    description:
-      "AirPods Pro sotib olganlarning 68% i telefon aksessuarlarini ham qidiradi.",
-    impact: "Har bir buyurtmaga o'rtacha +450,000 UZS",
-    recommendation: "AirPods Pro bilan birga telefon chexol va himoya shisha tavsiya qiling",
-    potentialGain: 25200000,
-    confidence: 82,
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-  },
-  {
-    id: "ai6",
-    type: "competitor",
-    severity: "low",
-    title: "Raqobatchi faoliyati",
-    description:
-      "Asosiy raqobatchi Dyson V15 ni 6,800,000 UZS ga tushirdi. Sizning narxingiz: 7,200,000 UZS.",
-    impact: "Ko'rilishlar 18% kamaydi",
-    recommendation: "Vaqtinchalik aksiya yoki qo'shimcha xizmat taklif qiling",
-    potentialGain: 8600000,
-    affectedProduct: "Dyson V15 Detect Absolute",
-    confidence: 71,
-    createdAt: new Date(Date.now() - 172800000).toISOString(),
-  },
-];
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
 export const mockReports: Report[] = [

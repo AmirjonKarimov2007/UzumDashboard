@@ -10,6 +10,22 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PrismaService } from '../../common/database/prisma.service';
 import { TelegramBotService } from './telegram-bot.service';
 
+@Controller('auth')
+export class TelegramPublicController {
+  constructor(private readonly botService: TelegramBotService) {}
+
+  @Get('telegram-config')
+  async config() {
+    const username = this.botService.getBotUsername();
+    return {
+      available: Boolean(username),
+      botUsername: username,
+      botUrl: username ? `https://t.me/${username}` : null,
+      registrationUrl: username ? `https://t.me/${username}?start=register` : null,
+    };
+  }
+}
+
 @Controller('me/telegram')
 @UseGuards(JwtAuthGuard)
 export class TelegramController {

@@ -186,13 +186,12 @@ export interface InventoryItem {
 }
 
 // ─── Notifications ───────────────────────────────────────────────────────────
-export type NotificationType = "success" | "warning" | "error" | "info" | "ai";
+export type NotificationType = "success" | "warning" | "error" | "info";
 export type NotificationCategory =
   | "order"
   | "product"
   | "finance"
   | "inventory"
-  | "ai"
   | "system"
   | "team";
 
@@ -226,31 +225,6 @@ export interface TeamMember {
   joinedAt: string;
   lastActive?: string;
   permissions: string[];
-}
-
-// ─── AI Insights ─────────────────────────────────────────────────────────────
-export type InsightSeverity = "critical" | "high" | "medium" | "low";
-export type InsightType =
-  | "dead_product"
-  | "price_optimization"
-  | "stock_alert"
-  | "trend"
-  | "competitor"
-  | "opportunity";
-
-export interface AIInsight {
-  id: string;
-  type: InsightType;
-  severity: InsightSeverity;
-  title: string;
-  description: string;
-  impact: string;
-  recommendation: string;
-  potentialGain?: number;
-  affectedProduct?: string;
-  confidence: number;
-  createdAt: string;
-  dismissed?: boolean;
 }
 
 // ─── Reports ─────────────────────────────────────────────────────────────────

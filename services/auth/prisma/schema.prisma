@@ -114,50 +114,58 @@ enum OtpType {
 // ============================================
 
 model Store {
-  id        String      @id @default(uuid())
-  userId    String
-  name      String
-  domain    String?
-  logo      String?
-  status    StoreStatus @default(ACTIVE)
-  plan      Plan        @default(FREE)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  id              String      @id @default(uuid())
+  userId          String
+  name            String
+  domain          String?
+  logo            String?
+  smartupClientId String?
+  status          StoreStatus @default(ACTIVE)
+  plan            Plan        @default(FREE)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
-  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  connection StoreConnection?
-  products   Product[]
-  productMeta ProductMeta[]
-  orders     Order[]
-  syncLogs   SyncLog[]
-  snapshots  AnalyticsSnapshot[]
-  expenses   Expense[]
-  reports    Report[]
-  insights   AiInsight[]
-  notifications Notification[]
-  returns    ProductReturn[]
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connection          StoreConnection?
+  products            Product[]
+  productMeta         ProductMeta[]
+  orders              Order[]
+  syncLogs            SyncLog[]
+  snapshots           AnalyticsSnapshot[]
+  expenses            Expense[]
+  manualWithdrawals   ManualWithdrawal[]
+  supplierPayments    SupplierPayment[]
+  reports             Report[]
+  smartupOrderImports SmartupOrderImport[]
+  insights            AiInsight[]
+  aiAutomationJobs    AiAutomationJob[]
+  aiProductResearch   AiProductResearch[]
+  aiPricingAnalyses   AiPricingAnalysis[]
+  aiListingDrafts     AiListingDraft[]
+  notifications       Notification[]
+  returns             ProductReturn[]
 
   @@index([userId])
   @@map("stores")
 }
 
 model StoreConnection {
-  id                String     @id @default(uuid())
-  storeId           String     @unique
-  uzumShopId        String
-  apiKeyEncrypted   String
-  apiKeyIv          String
-  apiKeyTag         String
-  isConnected       Boolean    @default(false)
-  isAutoSync        Boolean    @default(true)
-  lastSyncAt        DateTime?
-  lastSyncStatus    SyncStatus @default(PENDING)
-  lastSyncError     String?
-  rateLimitRemaining      Int?
-  rateLimitDayRemaining   Int?
-  rateLimitResetAt  DateTime?
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
+  id                    String     @id @default(uuid())
+  storeId               String     @unique
+  uzumShopId            String
+  apiKeyEncrypted       String
+  apiKeyIv              String
+  apiKeyTag             String
+  isConnected           Boolean    @default(false)
+  isAutoSync            Boolean    @default(true)
+  lastSyncAt            DateTime?
+  lastSyncStatus        SyncStatus @default(PENDING)
+  lastSyncError         String?
+  rateLimitRemaining    Int?
+  rateLimitDayRemaining Int?
+  rateLimitResetAt      DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -327,6 +335,30 @@ model OrderItem {
   @@map("order_items")
 }
 
+model SmartupOrderImport {
+  id                String   @id @default(uuid())
+  storeId           String
+  uzumOrderId       String
+  uzumInvoiceId     String?
+  smartupExternalId String
+  smartupDealId     String?
+  status            String   @default("SUCCESS")
+  errorMessage      String?
+  payload           Json?
+  response          Json?
+  importedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, uzumOrderId])
+  @@index([storeId])
+  @@index([storeId, uzumInvoiceId])
+  @@index([smartupDealId])
+  @@map("smartup_order_imports")
+}
+
 enum OrderScheme {
   FBS
   DBS
@@ -351,19 +383,19 @@ enum OrderStatus {
 // ============================================
 
 model Inventory {
-  id              String          @id @default(uuid())
-  productId       String          @unique
-  storeId         String
-  currentStock    Int             @default(0)
-  reservedStock   Int             @default(0)
-  minStock        Int             @default(5)
-  reorderPoint    Int             @default(10)
-  soldLast30Days  Int             @default(0)
+  id                String          @id @default(uuid())
+  productId         String          @unique
+  storeId           String
+  currentStock      Int             @default(0)
+  reservedStock     Int             @default(0)
+  minStock          Int             @default(5)
+  reorderPoint      Int             @default(10)
+  soldLast30Days    Int             @default(0)
   daysUntilStockout Int?
-  status          InventoryStatus @default(IN_STOCK)
-  lastRestockedAt DateTime?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  status            InventoryStatus @default(IN_STOCK)
+  lastRestockedAt   DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
@@ -428,6 +460,52 @@ model Expense {
   @@index([category])
   @@index([deletedAt])
   @@map("expenses")
+}
+
+// Bankka o'tkazilgan mablag'larni sotuvchi qo'lda qayd etadi. Uzum API
+// transactionlaridan alohida saqlanadi: API kechikkanida ham hisob va audit
+// tarixi yo'qolmaydi.
+model ManualWithdrawal {
+  id         String    @id @default(uuid())
+  storeId    String
+  reference  String?
+  status     String    @default("bajarildi")
+  amount     Decimal   @db.Decimal(14, 2)
+  occurredAt DateTime  @db.Date
+  note       String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, occurredAt])
+  @@index([storeId, deletedAt])
+  @@map("manual_withdrawals")
+}
+
+// Ta'minotchilarga amalda to'langan pullar. Bu kassa chiqimi Smartup/Uzumdagi
+// mahsulot tannarxidan alohida yuritiladi, shuning uchun foyda hisobida bir
+// xarajatni ikki marta ayirish xavfi bo'lmaydi.
+model SupplierPayment {
+  id            String    @id @default(uuid())
+  storeId       String
+  supplierName  String
+  amount        Decimal   @db.Decimal(14, 2)
+  occurredAt    DateTime  @db.Date
+  paymentMethod String?
+  reference     String?
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, occurredAt])
+  @@index([storeId, supplierName])
+  @@index([storeId, deletedAt])
+  @@map("supplier_payments")
 }
 
 enum ExpenseCategory {
@@ -688,6 +766,11 @@ model AuditLog {
 }
 
 enum AuditAction {
+  ADMIN_VIEW_STORE_API_KEY
+  ADMIN_USER_STATUS_CHANGED
+  ADMIN_USER_DELETED
+  ADMIN_IMPERSONATION_STARTED
+  SMARTUP_CLIENT_UPDATED
   USER_REGISTERED
   USER_LOGGED_IN
   USER_LOGGED_OUT
@@ -716,16 +799,16 @@ enum AuditAction {
 // old record from its API. Sync upserts by (storeId, uzumOrderId, skuTitle).
 
 enum ReturnStatus {
-  RETURNED          // Uzum omborida kutyapti
-  READY_FOR_PICKUP  // Olib ketishga tayyor
-  RECEIVED          // Sotuvchi qabul qildi
-  LOST              // Yo'qolgan (15+ kun, qabul qilinmagan)
+  RETURNED // Uzum omborida kutyapti
+  READY_FOR_PICKUP // Olib ketishga tayyor
+  RECEIVED // Sotuvchi qabul qildi
+  LOST // Yo'qolgan (15+ kun, qabul qilinmagan)
 }
 
 model ProductReturn {
   id             String       @id @default(uuid())
   storeId        String
-  uzumOrderId    String       // FBS order id (return source)
+  uzumOrderId    String // FBS order id (return source)
   publicId       String?
   skuId          String?
   skuTitle       String?
@@ -737,11 +820,11 @@ model ProductReturn {
   salePrice      Decimal?     @db.Decimal(14, 2) // sotuv narxi (so'm)
   reason         String?
   status         ReturnStatus @default(RETURNED)
-  manualReceived Boolean      @default(false)    // sotuvchi qo'lda "qabul qildim" deb belgilagan
+  manualReceived Boolean      @default(false) // sotuvchi qo'lda "qabul qildim" deb belgilagan
   orderedAt      DateTime?
   returnedAt     DateTime?
   receivedAt     DateTime?
-  lastSeenAt     DateTime     @default(now())    // Uzum oxirgi marta qaytargan vaqt (lost aniqlash uchun)
+  lastSeenAt     DateTime     @default(now()) // Uzum oxirgi marta qaytargan vaqt (lost aniqlash uchun)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -752,4 +835,349 @@ model ProductReturn {
   @@index([status])
   @@index([returnedAt])
   @@map("product_returns")
+}
+
+// ============================================
+// AI PRODUCT AUTOMATION
+// ============================================
+
+enum AiAutomationStatus {
+  PRODUCT_DRAFT
+  RESEARCH_READY
+  RESEARCH_FAILED
+  WAITING_FOR_LISTING_APPROVAL
+  LISTING_READY
+  LISTING_FAILED
+  WAITING_FOR_IMAGE_IDEAS_APPROVAL
+  ANALYZING_COMPETITOR_IMAGES
+  IMAGE_IDEAS_READY
+  IMAGE_IDEAS_FAILED
+  WAITING_FOR_IMAGE_LANGUAGE_AND_CONFIRMATION
+  IMAGES_READY
+  IMAGES_FAILED
+  CANCELLED
+  QUEUED
+  ANALYZING_PRODUCT
+  ANALYSIS_COMPLETE
+  RESEARCHING_UZUM
+  CALCULATING_PRICE
+  GENERATING_LISTING
+  READY_FOR_CREATIVE
+  PLANNING_IMAGES
+  GENERATING_IMAGES
+  QUALITY_CONTROL
+  READY_TO_PUBLISH
+  PUBLISHING
+  MODERATION
+  SUCCESS
+  RETRYING
+  NEEDS_ATTENTION
+  REJECTED
+  FAILED
+}
+
+enum AiJobStepStatus {
+  WAITING
+  IN_PROGRESS
+  COMPLETED
+  NEEDS_ATTENTION
+  FAILED
+  CANCELLED
+}
+
+enum AiImageLanguage {
+  UZBEK
+  RUSSIAN
+}
+
+model AiAutomationJob {
+  id                   String             @id @default(uuid())
+  storeId              String
+  status               AiAutomationStatus @default(PRODUCT_DRAFT)
+  progress             Int                @default(0)
+  currentStep          String?
+  productName          String
+  knownDimensions      String?
+  purchaseCost         Decimal?           @db.Decimal(14, 2)
+  desiredSellingPrice  Decimal?           @db.Decimal(14, 2)
+  sku                  String?
+  barcode              String?
+  knownCharacteristics String?
+  additionalNotes      String?
+  errorMessage         String?
+  imageLanguage        AiImageLanguage?
+  cancelledAt          DateTime?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  store                   Store                      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  steps                   AiJobStep[]
+  originalImages          AiOriginalImage[]
+  analysis                AiProductAnalysis?
+  research                AiProductResearch?
+  pricing                 AiPricingAnalysis?
+  listingDraft            AiListingDraft?
+  competitorImageAnalysis AiCompetitorImageAnalysis?
+  creativeBriefs          AiCreativeBrief[]
+  generatedImages         AiGeneratedImage[]
+  usageLogs               AiUsageLog[]
+
+  @@index([storeId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("ai_automation_jobs")
+}
+
+model AiJobStep {
+  id          String          @id @default(uuid())
+  jobId       String
+  key         String
+  label       String
+  sortOrder   Int
+  status      AiJobStepStatus @default(WAITING)
+  progress    Int             @default(0)
+  result      Json?
+  error       String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, key])
+  @@index([jobId, sortOrder])
+  @@map("ai_job_steps")
+}
+
+model AiOriginalImage {
+  id           String   @id @default(uuid())
+  jobId        String
+  originalName String
+  storedName   String
+  storagePath  String
+  mimeType     String
+  size         Int
+  createdAt    DateTime @default(now())
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("ai_original_images")
+}
+
+model AiProductAnalysis {
+  id         String   @id @default(uuid())
+  jobId      String   @unique
+  summary    String?
+  result     Json
+  model      String
+  responseId String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("ai_product_analysis")
+}
+
+model AiProductResearch {
+  id                       String   @id @default(uuid())
+  jobId                    String   @unique
+  storeId                  String
+  categoryId               String?
+  categoryName             String?
+  categoryConfidence       Float?
+  categoryReason           String?
+  subcategoryId            String?
+  subcategoryName          String?
+  subcategoryConfidence    Float?
+  subcategoryReason        String?
+  queryTerms               Json
+  commonCharacteristics    Json
+  commonTitlePatterns      Json
+  positioningIdeas         Json
+  warnings                 Json
+  knownCommissionRate      Decimal? @db.Decimal(5, 2)
+  sellerCatalogMatches     Int      @default(0)
+  publicMarketplaceMatches Int      @default(0)
+  sourceTimestamp          DateTime
+  model                    String?
+  responseId               String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  job         AiAutomationJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  store       Store                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  competitors AiCompetitorProduct[]
+
+  @@index([storeId])
+  @@index([sourceTimestamp])
+  @@map("ai_product_research")
+}
+
+model AiCompetitorProduct {
+  id                String   @id @default(uuid())
+  researchId        String
+  title             String
+  price             Decimal? @db.Decimal(14, 2)
+  oldPrice          Decimal? @db.Decimal(14, 2)
+  productId         String?
+  url               String?
+  category          String?
+  imageUrl          String?
+  weeklySalesCount  Int?
+  weeklySalesSource String?
+  characteristics   Json
+  source            String
+  sourceEvidence    String?
+  sourceTimestamp   DateTime
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  research AiProductResearch @relation(fields: [researchId], references: [id], onDelete: Cascade)
+
+  @@index([researchId])
+  @@index([productId])
+  @@index([source])
+  @@map("ai_competitor_products")
+}
+
+model AiPricingAnalysis {
+  id                             String   @id @default(uuid())
+  jobId                          String   @unique
+  storeId                        String
+  purchaseCost                   Decimal? @db.Decimal(14, 2)
+  userPrice                      Decimal? @db.Decimal(14, 2)
+  competitorMin                  Decimal? @db.Decimal(14, 2)
+  competitorMedian               Decimal? @db.Decimal(14, 2)
+  competitorMax                  Decimal? @db.Decimal(14, 2)
+  commissionRate                 Decimal? @db.Decimal(5, 2)
+  estimatedFees                  Decimal? @db.Decimal(14, 2)
+  estimatedLogistics             Decimal? @db.Decimal(14, 2)
+  estimatedProfitBeforeLogistics Decimal? @db.Decimal(14, 2)
+  estimatedProfit                Decimal? @db.Decimal(14, 2)
+  estimatedMargin                Decimal? @db.Decimal(7, 2)
+  recommendedPrice               Decimal? @db.Decimal(14, 2)
+  pricingReason                  String
+  unavailableFields              Json
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
+
+  job   AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  store Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@map("ai_pricing_analysis")
+}
+
+model AiListingDraft {
+  id                 String   @id @default(uuid())
+  jobId              String   @unique
+  storeId            String
+  titleUz            String
+  shortDescriptionUz String   @default("")
+  descriptionUz      String
+  featuresUz         Json
+  titleRu            String
+  shortDescriptionRu String   @default("")
+  descriptionRu      String
+  featuresRu         Json
+  seoKeywords        Json
+  characteristics    Json
+  infographicCopy    Json
+  warnings           Json
+  fieldSources       Json
+  model              String
+  responseId         String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  job   AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  store Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@map("ai_listing_drafts")
+}
+
+model AiCompetitorImageAnalysis {
+  id                    String   @id @default(uuid())
+  jobId                 String   @unique
+  findings              Json
+  imagesAnalyzed        Int      @default(0)
+  competitorsConsidered Int      @default(0)
+  model                 String
+  responseId            String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("ai_competitor_image_analyses")
+}
+
+model AiCreativeBrief {
+  id                    String   @id @default(uuid())
+  jobId                 String
+  number                Int
+  goal                  String
+  headlineUz            String
+  headlineRu            String
+  supportingTextUz      String
+  supportingTextRu      String
+  composition           String
+  productAdvantage      String
+  competitorImprovement String
+  promptTemplate        String
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, number])
+  @@index([jobId])
+  @@map("ai_creative_briefs")
+}
+
+model AiGeneratedImage {
+  id               String          @id @default(uuid())
+  jobId            String
+  briefNumber      Int
+  language         AiImageLanguage
+  originalName     String
+  storagePath      String
+  mimeType         String          @default("image/png")
+  size             Int
+  model            String
+  responseId       String?
+  estimatedCostUsd Decimal?        @db.Decimal(12, 6)
+  createdAt        DateTime        @default(now())
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, briefNumber])
+  @@index([jobId])
+  @@map("ai_generated_images")
+}
+
+model AiUsageLog {
+  id               String   @id @default(uuid())
+  jobId            String
+  operation        String
+  model            String
+  responseId       String?
+  inputTokens      Int      @default(0)
+  outputTokens     Int      @default(0)
+  totalTokens      Int      @default(0)
+  estimatedCostUsd Decimal? @db.Decimal(12, 6)
+  metadata         Json?
+  createdAt        DateTime @default(now())
+
+  job AiAutomationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("ai_usage_logs")
 }

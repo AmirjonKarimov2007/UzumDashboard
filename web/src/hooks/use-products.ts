@@ -4,6 +4,7 @@ import { productsApi } from '@/lib/api/products';
 import { apiClient } from '@/lib/api/client';
 import { useAuthStore } from '@/stores/auth-store';
 import { toast } from 'sonner';
+import type { AxiosError } from 'axios';
 
 function useActiveStoreId() {
   return useAuthStore((s) => s.activeStoreId);
@@ -14,6 +15,56 @@ export interface ProductMetaEntry {
   costPrice: number | null;
   articleCode: string | null;
   xid: string | null;
+}
+
+interface ApiErrorPayload {
+  message?: string;
+}
+
+export interface LiveProductSku {
+  skuId?: string | number;
+  skuTitle?: string;
+  productTitle?: string;
+  price?: string | number;
+  quantityActive?: number;
+  quantityFbs?: number;
+  quantitySold?: number;
+  quantityReturned?: number;
+  barcode?: string | number;
+  imageUrls?: unknown[];
+  image?: unknown;
+  previewImg?: unknown;
+  previewImage?: unknown;
+  photo?: unknown;
+  photoKey?: string;
+  rankInfo?: { rank?: string };
+  skuDimension?: { length?: number; width?: number; height?: number };
+}
+
+export interface LiveProduct {
+  productId?: string | number;
+  title?: string;
+  category?: string;
+  imageUrls?: unknown[];
+  image?: unknown;
+  previewImg?: unknown;
+  previewImage?: unknown;
+  photo?: unknown;
+  photoKey?: string;
+  quantityActive?: number;
+  quantityFbs?: number;
+  status?: { value?: string; title?: string };
+  rating?: string | number;
+  feedbackQuantity?: number;
+  commissionDto?: { minCommission?: string | number };
+  skuList?: LiveProductSku[];
+}
+
+export interface LiveProductsResponse {
+  products: LiveProduct[];
+  total: number;
+  page: number;
+  size: number;
 }
 
 export function useProductMeta() {
@@ -41,26 +92,29 @@ export function useUpsertProductMeta() {
       );
       return data as ProductMetaEntry & { skuId: string };
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      queryClient.setQueryData<Record<string, ProductMetaEntry>>(['product-meta', storeId], (old) => ({ ...old, [saved.skuId]: saved }));
       queryClient.invalidateQueries({ queryKey: ['product-meta', storeId] });
+      queryClient.invalidateQueries({ queryKey: ['products', 'live', storeId] });
       toast.success('Saqlandi');
     },
-    onError: (err: any) => {
+    onError: (err: AxiosError<ApiErrorPayload>) => {
       toast.error(err?.response?.data?.message || 'Saqlashda xato');
     },
   });
 }
 
-/** Live products fetched directly from Uzum API (no DB cache).
- *  Note: Uzum API ignores the `order` param so we omit it here — caller
- *  must implement order client-side. */
+/** Live products fetched directly from Uzum API (with a short backend SWR cache). */
 export function useLiveProducts(
   params?: {
     page?: number;
     size?: number;
     filter?: string;
     search?: string;
+    costFilter?: 'MISSING';
+    xidFilter?: 'MISSING';
     sortBy?: string;
+    order?: 'ASC' | 'DESC';
   },
   enabled: boolean = true,
 ) {
@@ -72,7 +126,7 @@ export function useLiveProducts(
         `/marketplace/stores/${storeId}/fbs/products`,
         { params, timeout: 25_000 },
       );
-      return data as { products: any[]; total: number; page: number; size: number };
+      return data as LiveProductsResponse;
     },
     enabled: enabled && !!storeId,
     staleTime: 60 * 1000,
@@ -102,6 +156,15 @@ export interface ProductAnalyticsRow {
   roi: number;
   rank: string;
   skuCount: number;
+  skus: Array<{
+    skuId: number;
+    title: string;
+    barcode: string | null;
+    article: string | null;
+    sold: number;
+    stock: number;
+    price: number;
+  }>;
   turnover: number;
   statusValue: string;
   statusTitle: string;

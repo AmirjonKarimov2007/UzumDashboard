@@ -1,5 +1,5 @@
 import { Controller, Get, Put, Param, Body, UseGuards } from '@nestjs/common';
-import { IsOptional, IsString, IsNumber, ValidateIf } from 'class-validator';
+import { IsOptional, IsString, IsNumber, ValidateIf, Min } from 'class-validator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ProductMetaService } from './product-meta.service';
@@ -8,6 +8,7 @@ class UpsertProductMetaDto {
   @IsOptional()
   @ValidateIf((o) => o.costPrice !== null)
   @IsNumber()
+  @Min(0)
   costPrice?: number | null;
 
   @IsOptional()

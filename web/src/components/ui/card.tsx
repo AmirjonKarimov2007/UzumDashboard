@@ -8,12 +8,12 @@ const Card = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "rounded-xl border transition-all duration-150",
+      "rounded-[18px] border transition-[border-color,box-shadow,background-color] duration-150",
       {
-        "bg-[#0a0a0f] border-[#27272a]": level === 1,
-        "bg-[#0a0a0f] border-[#27272a] shadow-sm hover:-translate-y-px": level === 2,
-        "bg-[#121218] border-[#3f3f46] shadow-xl": level === 3,
-        "bg-[#0a0a0f] border-[#27272a] shadow-lg hover:-translate-y-0.5": level === 4,
+        "bg-[var(--surface)] border-[var(--border-subtle)]": level === 1,
+        "bg-[var(--surface)] border-[var(--border)] shadow-[var(--shadow-xs)] hover:border-[var(--border-strong)]": level === 2,
+        "bg-[var(--surface-raised)] border-[var(--border-strong)] shadow-[var(--shadow-lg)]": level === 3,
+        "bg-[var(--surface)] border-[var(--border)] shadow-[var(--shadow-md)] hover:border-[var(--border-strong)]": level === 4,
       },
       className
     )}
@@ -36,7 +36,7 @@ const CardTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <h3
     ref={ref}
-    className={cn("text-lg font-semibold text-[#fafafa]", className)}
+    className={cn("text-base font-bold tracking-[-0.02em] text-[var(--text-primary)]", className)}
     {...props}
   />
 ));
@@ -48,7 +48,7 @@ const CardDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
-    className={cn("text-sm text-[#71717a]", className)}
+    className={cn("text-sm leading-6 text-[var(--text-secondary)]", className)}
     {...props}
   />
 ));
